@@ -12,3 +12,20 @@ ability_sum = ['Без силы', 'Телепат', 'Дыхание огнем',
 ability_power_sum = ['Абсолют', 'Архимаг', 'Уверенный владелец', 'Средний пользователь', 'Неофит', 'Слабак']
 chaos_sum = ['Проводник хаоса', 'Тронут хаосом', 'Избран богами', 'Любимец дьявола', 'Нулификатор-пария']
 title_sum = ['Надежда нового мира', 'Вина падения морали', 'Эмоциональный вантуз', 'Мистер Чекисто', 'Военный преступник']
+# Weights correspond to values at the same positions in each pool.
+# Higher numbers make an outcome more likely; weights need not sum to 1.
+substory_weights = [3, 4, 4, 2, 5, 1, 1]
+race_weights = [6, 3, 2]
+race_subrace_weights = {race: [1, 1, 1] for race in race_sum}
+size_weights = [2, 6, 3, 1]
+strength_weights = [1, 2, 5, 3]
+speed_weights = [1, 2, 5, 3]
+iq_weights = [1, 3, 5, 2]
+fighting_weights = [1, 3, 5, 2]
+weapon_weights = [5, 3, 3, 4, 2, 1, 1]
+weapon_mastery_weights = [1, 2, 3, 5, 4, 2]
+weapon_enchantment_weights = [5, 2, 2, 1, 3, 2]
+ability_weights = [5, 3, 3, 2, 2, 1, 3, 1, 2]
+ability_power_weights = [1, 1, 2, 4, 5, 3]
+chaos_weights = [3, 3, 2, 2, 1]
+title_weights = [3, 2, 4, 2, 2]
