@@ -27,6 +27,7 @@ def run_tournament(character_paths):
 
     report = ['ГРУППОВОЙ ЭТАП']
     qualifiers = []
+    group_standings = []
     for group_index, group in enumerate(groups):
         group_name = chr(ord('A') + group_index)
         table = {
@@ -54,14 +55,23 @@ def run_tournament(character_paths):
             ),
             reverse=True,
         )
+        group_table = []
         report.extend(['', f'Группа {group_name} - таблица:'])
         for rank, path in enumerate(ranked, start=1):
             stats = table[path]
             name = characters[path].get('name', path.stem)
+            group_table.append({
+                'rank': rank,
+                'name': name,
+                'wins': stats['wins'],
+                'for': stats['for'],
+                'against': stats['against'],
+            })
             report.append(
                 f'{rank}. {name} - побед: {stats["wins"]}, '
                 f'очки: {stats["for"]}:{stats["against"]}'
             )
+        group_standings.append({'name': group_name, 'standings': group_table})
         qualifiers.extend(ranked[:ADVANCE_PER_GROUP])
 
     report.extend(['', 'СЕТКА ПЛЕЙ-ОФФ'])
@@ -72,11 +82,19 @@ def run_tournament(character_paths):
         (qualifiers[6], qualifiers[5]),
     )
     quarter_winners = []
+    quarterfinals = []
     report.append('Четвертьфинал:')
     for index, (first, second) in enumerate(quarterfinal_pairs, start=1):
         result = Fight.play(first, second)
         winner = result['winner_path']
         quarter_winners.append(winner)
+        quarterfinals.append({
+            'first': characters[first].get('name', first.stem),
+            'second': characters[second].get('name', second.stem),
+            'winner': characters[winner].get('name', winner.stem),
+            'first_score': result['first_total'],
+            'second_score': result['second_total'],
+        })
         report.append(
             f'  ЧФ{index}: {characters[first].get("name", first.stem)} '
             f'против {characters[second].get("name", second.stem)} '
@@ -86,11 +104,19 @@ def run_tournament(character_paths):
 
     semifinal_pairs = ((quarter_winners[0], quarter_winners[1]), (quarter_winners[2], quarter_winners[3]))
     semifinal_winners = []
+    semifinals = []
     report.append('Полуфинал:')
     for index, (first, second) in enumerate(semifinal_pairs, start=1):
         result = Fight.play(first, second)
         winner = result['winner_path']
         semifinal_winners.append(winner)
+        semifinals.append({
+            'first': characters[first].get('name', first.stem),
+            'second': characters[second].get('name', second.stem),
+            'winner': characters[winner].get('name', winner.stem),
+            'first_score': result['first_total'],
+            'second_score': result['second_total'],
+        })
         report.append(
             f'  ПФ{index}: {characters[first].get("name", first.stem)} '
             f'против {characters[second].get("name", second.stem)} '
@@ -101,6 +127,13 @@ def run_tournament(character_paths):
     first, second = semifinal_winners
     final_result = Fight.play(first, second)
     champion = final_result['winner_path']
+    final = {
+        'first': characters[first].get('name', first.stem),
+        'second': characters[second].get('name', second.stem),
+        'winner': characters[champion].get('name', champion.stem),
+        'first_score': final_result['first_total'],
+        'second_score': final_result['second_total'],
+    }
     report.extend([
         'Финал:',
         f'  {characters[first].get("name", first.stem)} '
@@ -117,4 +150,10 @@ def run_tournament(character_paths):
         'report': '\n'.join(report),
         'groups': groups,
         'champion_path': champion,
+        'bracket': {
+            'quarterfinals': quarterfinals,
+            'semifinals': semifinals,
+            'final': final,
+        },
+        'group_standings': group_standings,
     }
