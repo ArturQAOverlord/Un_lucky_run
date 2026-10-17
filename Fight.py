@@ -96,7 +96,13 @@ def fight_match(first_path, second_path):
     else:
         winner = first_name if first_total > second_total else second_name
         report.extend(['', f'Победитель: {winner}!'])
-    return {'report': '\n'.join(report), 'comparisons': comparisons}
+    return {
+        'report': '\n'.join(report),
+        'comparisons': comparisons,
+        'winner': winner,
+        'first_name': first_name,
+        'second_name': second_name,
+    }
 
 
 def fight(first_path, second_path):

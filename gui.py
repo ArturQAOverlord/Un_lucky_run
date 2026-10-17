@@ -1,9 +1,11 @@
 from pathlib import Path
 from contextlib import redirect_stdout
 from io import StringIO
+import json
 import math
 import random
 import textwrap
+import unicodedata
 import tkinter as tk
 from tkinter import messagebox, ttk
 
@@ -35,12 +37,50 @@ class CharacterApp:
         self.page_geometry = '600x640'
         self.window_resolution = None
         self.fullscreen = False
+        self.dark_theme = False
+        self.settings_path = Path(__file__).resolve().parent / 'settings.json'
+        self._load_settings()
+        if self.fullscreen:
+            root.attributes('-fullscreen', True)
+        elif self.window_resolution:
+            root.geometry(self.window_resolution)
         root.bind('<Escape>', self._leave_fullscreen)
         style = ttk.Style(root)
         self.style = style
-        self.dark_theme = False
         style.configure('Menu.TButton', font=('Segoe UI', 13, 'bold'), padding=(16, 14))
+        self._apply_theme()
         self.show_home()
+
+    def _load_settings(self):
+        try:
+            settings = json.loads(self.settings_path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return
+        if not isinstance(settings, dict):
+            return
+        self.dark_theme = bool(settings.get('dark_theme', False))
+        self.fullscreen = bool(settings.get('fullscreen', False))
+        resolution = settings.get('window_resolution')
+        if isinstance(resolution, str) and 'x' in resolution:
+            try:
+                width, height = (int(part) for part in resolution.split('x', 1))
+            except ValueError:
+                return
+            if width >= 480 and height >= 420:
+                self.window_resolution = f'{width}x{height}'
+
+    def _save_settings(self):
+        settings = {
+            'dark_theme': self.dark_theme,
+            'fullscreen': self.fullscreen,
+            'window_resolution': self.window_resolution,
+        }
+        try:
+            self.settings_path.write_text(
+                json.dumps(settings, ensure_ascii=False, indent=2), encoding='utf-8'
+            )
+        except OSError:
+            pass
 
     def clear(self):
         self.generation_active = False
@@ -62,30 +102,67 @@ class CharacterApp:
         if 'clam' in self.style.theme_names():
             self.style.theme_use('clam')
         if self.dark_theme:
-            colors = {'background': '#17191c', 'surface': '#22262b', 'input': '#30363d',
-                      'foreground': '#f1f3f5', 'accent': '#3979a8'}
+            colors = {'background': '#111820', 'surface': '#1b2632', 'input': '#253342',
+                      'foreground': '#e8eef3', 'muted': '#9aabb9', 'accent': '#477c86',
+                      'accent_hover': '#568f98', 'border': '#2b3947'}
         else:
-            colors = {'background': '#f0f0f0', 'surface': '#ffffff', 'input': '#ffffff',
-                      'foreground': '#202124', 'accent': '#d9eaf7'}
+            colors = {'background': '#f3f6f8', 'surface': '#ffffff', 'input': '#ffffff',
+                      'foreground': '#182530', 'muted': '#657681', 'accent': '#356d78',
+                      'accent_hover': '#2c5962', 'border': '#dce4e9'}
+        self.ui_colors = colors
         self.style.configure('.', background=colors['background'], foreground=colors['foreground'])
         self.style.configure('TFrame', background=colors['background'])
         self.style.configure('TLabel', background=colors['background'], foreground=colors['foreground'])
-        self.style.configure('TButton', background=colors['surface'], foreground=colors['foreground'])
-        self.style.map('TButton', background=[('active', colors['accent'])])
-        self.style.configure('Menu.TButton', font=('Segoe UI', 13, 'bold'), padding=(16, 14))
-        self.style.configure('TEntry', fieldbackground=colors['input'], foreground=colors['foreground'])
+        self.style.configure('TButton', background=colors['surface'], foreground=colors['foreground'],
+                             bordercolor=colors['border'], padding=(12, 9),
+                             font=('Segoe UI', 10), relief='flat')
+        self.style.map('TButton', background=[('active', colors['accent_hover'])],
+                       foreground=[('active', '#ffffff')])
+        self.style.configure('Menu.TButton', font=('Segoe UI', 12, 'bold'), padding=(18, 14),
+                             anchor='w')
+        self.style.configure('Section.TLabel', font=('Segoe UI', 10, 'bold'))
+        self.style.configure('Metric.TLabel', font=('Segoe UI', 20, 'bold'),
+                             foreground=colors['accent'])
+        self.style.configure('Muted.TLabel', background=colors['surface'], foreground=colors['muted'])
+        self.style.configure('Creation.Horizontal.TProgressbar', troughcolor=colors['input'],
+                             background=colors['accent'], bordercolor=colors['border'], thickness=10)
+        self.style.configure('Primary.TButton', background=colors['accent'],
+                             foreground='#ffffff', padding=(16, 10),
+                             font=('Segoe UI', 10, 'bold'), borderwidth=0)
+        self.style.map('Primary.TButton', background=[('active', colors['accent_hover'])],
+                       foreground=[('active', '#ffffff')])
+        skip_background = '#e0ad4f' if self.dark_theme else '#d99a2b'
+        skip_hover = '#efc46d' if self.dark_theme else '#bd7e18'
+        skip_foreground = '#17212b'
+        self.style.configure('Skip.TButton', background=skip_background,
+                             foreground=skip_foreground, padding=(18, 11),
+                             font=('Segoe UI', 10, 'bold'), borderwidth=0)
+        self.style.map(
+            'Skip.TButton',
+            background=[('disabled', colors['surface']), ('pressed', skip_hover),
+                        ('active', skip_hover)],
+            foreground=[('disabled', colors['muted']), ('!disabled', skip_foreground)],
+        )
+        self.style.configure('TEntry', fieldbackground=colors['input'], foreground=colors['foreground'],
+                             bordercolor=colors['border'], padding=7)
         self.style.configure('TCombobox', fieldbackground=colors['input'], foreground=colors['foreground'])
         self.style.map('TCombobox', fieldbackground=[('readonly', colors['input'])],
-                       foreground=[('readonly', colors['foreground'])])
+                       foreground=[('readonly', colors['foreground'])],
+                       background=[('active', colors['surface'])])
         self.style.configure('TCheckbutton', background=colors['background'], foreground=colors['foreground'])
-        self.style.configure('Treeview', background=colors['input'], fieldbackground=colors['input'],
-                             foreground=colors['foreground'], rowheight=26)
-        self.style.configure('Treeview.Heading', background=colors['surface'], foreground=colors['foreground'])
+        self.style.map('TCheckbutton', background=[('active', colors['background'])],
+                       foreground=[('active', colors['foreground'])])
+        self.style.configure('Treeview', background=colors['surface'], fieldbackground=colors['surface'],
+                             foreground=colors['foreground'], rowheight=32, borderwidth=0,
+                             font=('Segoe UI', 9))
+        self.style.configure('Treeview.Heading', background=colors['background'],
+                             foreground=colors['muted'], font=('Segoe UI', 9, 'bold'), padding=8)
         self.style.map('Treeview', background=[('selected', colors['accent'])],
                        foreground=[('selected', colors['foreground'])])
-        self.style.configure('TLabelframe', background=colors['background'])
-        self.style.configure('TLabelframe.Label', background=colors['background'],
-                             foreground=colors['foreground'])
+        self.style.configure('TLabelframe', background=colors['surface'], bordercolor=colors['border'],
+                             relief='solid', borderwidth=1)
+        self.style.configure('TLabelframe.Label', background=colors['surface'],
+                             foreground=colors['muted'], font=('Segoe UI', 9, 'bold'))
         self.style.configure('TNotebook', background=colors['background'], borderwidth=0)
         self.style.configure('TNotebook.Tab', background=colors['surface'],
                              foreground=colors['foreground'], padding=(10, 5))
@@ -103,7 +180,7 @@ class CharacterApp:
                 if isinstance(widget, tk.Text):
                     widget.configure(insertbackground=colors['foreground'])
             elif isinstance(widget, tk.Canvas):
-                widget.configure(background=colors['background'])
+                widget.configure(background=colors['surface'], highlightbackground=colors['border'])
             for child in widget.winfo_children():
                 recolor(child)
 
@@ -112,6 +189,7 @@ class CharacterApp:
     def _toggle_dark_theme(self):
         self.dark_theme = self.dark_theme_var.get()
         self._apply_theme()
+        self._save_settings()
 
     def _set_page_geometry(self, geometry):
         self.page_geometry = geometry
@@ -140,10 +218,14 @@ class CharacterApp:
         return max(0.65, min(1.7, width / reference_width, height / reference_height))
 
     def _automatic_page_scale(self, reference_width, reference_height):
-        if self.window_resolution or self.fullscreen:
-            return 1.0
-        width = self.root.winfo_screenwidth()
-        height = max(420, self.root.winfo_screenheight() - 80)
+        if self.fullscreen:
+            width = self.root.winfo_screenwidth()
+            height = self.root.winfo_screenheight()
+        elif self.window_resolution:
+            width, height = (int(value) for value in self.window_resolution.split('x'))
+        else:
+            width = self.root.winfo_screenwidth()
+            height = max(420, self.root.winfo_screenheight() - 80)
         return max(0.65, min(1.5, width / reference_width, height / reference_height))
 
     def _resolution_options(self):
@@ -160,11 +242,13 @@ class CharacterApp:
         choice = self.resolution_var.get()
         self.window_resolution = None if choice == 'Авто' else choice
         self._apply_window_geometry()
+        self._save_settings()
 
     def _toggle_fullscreen(self):
         self.fullscreen = self.fullscreen_var.get()
         self.root.attributes('-fullscreen', self.fullscreen)
         self._apply_window_geometry()
+        self._save_settings()
 
     def _leave_fullscreen(self, _event=None):
         if self.fullscreen:
@@ -173,60 +257,115 @@ class CharacterApp:
             if hasattr(self, 'fullscreen_var'):
                 self.fullscreen_var.set(False)
             self._apply_window_geometry()
+            self._save_settings()
 
     def heading(self, parent, text):
-        ttk.Label(parent, text=text, font=('Segoe UI', 16, 'bold')).pack(anchor='w', pady=(0, 16))
+        ttk.Label(parent, text=text, font=('Segoe UI', 19, 'bold')).pack(anchor='w', pady=(0, 16))
 
     def show_home(self):
         self.clear()
         self.root.title('Неудачный забег')
-        self._set_page_geometry('600x640')
-        frame = ttk.Frame(self.root, padding=(36, 30))
+        self._set_page_geometry('600x700')
+        colors = self.ui_colors
+        frame = ttk.Frame(self.root, padding=(36, 26))
         frame.pack(fill='both', expand=True)
-        ttk.Label(frame, text='Неудачный забег', font=('Segoe UI', 24, 'bold')).pack(pady=(18, 4))
-        ttk.Label(frame, text='Главное меню', font=('Segoe UI', 12)).pack(pady=(0, 24))
+        ttk.Label(frame, text='Неудачный забег',
+                  font=('Segoe UI', 25, 'bold')).pack(pady=(6, 3))
+        ttk.Label(frame, text='Создай героя, собери команду и узнай, кто победит.',
+                  foreground=colors['muted'], font=('Segoe UI', 10)).pack(pady=(0, 16))
         menu = ttk.Frame(frame)
-        menu.pack(fill='both', expand=True, pady=(0, 8))
+        menu.pack(fill='both', expand=True)
         entries = (
-            ('Создать персонажа', self.show_create),
-            ('Готовые персонажи', self.show_characters),
-            ('Сражение', self.show_fight),
-            ('Турнир', self.show_tournament),
-            ('\u041e\u043f\u0446\u0438\u0438', self.show_options),
+            ('Генератор героев', 'Создай нового персонажа', self.show_create),
+            ('Коллекция', 'Просматривай и узнавай героев', self.show_characters),
+            ('Арена', 'Сравни двух бойцов в сражении', self.show_fight),
+            ('Турнир', 'Собери ростер и проведи чемпионат', self.show_tournament),
+            ('Опции', 'Тема и параметры окна', self.show_options),
         )
-        for text, command in entries:
-            ttk.Button(menu, text=text, command=command, style='Menu.TButton').pack(
-                fill='both', expand=True, pady=7
-            )
+        for title, description, command in entries:
+            tile = tk.Frame(menu, bg=colors['surface'], highlightthickness=1,
+                            highlightbackground=colors['border'], padx=14, pady=7, cursor='hand2')
+            tile.configure(takefocus=True)
+            tile.pack(fill='x', pady=4)
+            title_label = tk.Label(tile, text=title, bg=colors['surface'], fg=colors['foreground'],
+                                  font=('Segoe UI', 11, 'bold'), anchor='w')
+            title_label.pack(fill='x')
+            description_label = tk.Label(tile, text=description, bg=colors['surface'], fg=colors['muted'],
+                                         font=('Segoe UI', 9), anchor='w')
+            description_label.pack(fill='x', pady=(2, 0))
+            for widget in (tile, title_label, description_label):
+                widget.bind('<Button-1>', lambda _event, action=command: action())
+                widget.bind('<Return>', lambda _event, action=command: action())
+                widget.bind('<Enter>', lambda _event, card=tile: card.configure(highlightbackground=colors['accent']))
+                widget.bind('<Leave>', lambda _event, card=tile: card.configure(highlightbackground=colors['border']))
+            tile.bind('<FocusIn>', lambda _event, card=tile: card.configure(
+                highlightbackground=colors['accent'], highlightthickness=2))
+            tile.bind('<FocusOut>', lambda _event, card=tile: card.configure(
+                highlightbackground=colors['border'], highlightthickness=1))
+        exit_container = ttk.Frame(frame)
+        exit_container.pack(fill='x', pady=(8, 0))
+        exit_icon = tk.Canvas(exit_container, width=44, height=44, highlightthickness=0,
+                              background=colors['surface'], cursor='hand2')
+        exit_icon.pack(side='right', padx=2, pady=2)
+        exit_icon.create_rectangle(6, 5, 22, 39, outline=colors['muted'], width=2)
+        exit_icon.create_line(17, 7, 17, 37, fill=colors['muted'], width=1)
+        exit_icon.create_line(13, 22, 37, 22, fill=colors['muted'], width=3, arrow='last')
+        exit_icon.bind('<Button-1>', lambda _event: self.root.destroy())
 
     def show_options(self):
         self.clear()
         frame = ttk.Frame(self.root, padding=24)
         frame.pack(fill='both', expand=True)
-        ttk.Button(frame, text='Назад', command=self.show_home).pack(anchor='w', pady=(0, 18))
+        ttk.Button(frame, text='← Назад', command=self.show_home).pack(
+            anchor='w', pady=(0, 18)
+        )
         settings = ttk.Frame(frame)
         settings.pack(expand=True)
-        ttk.Label(settings, text='Опции', font=('Segoe UI', 16, 'bold')).pack(pady=(0, 16))
+        ttk.Label(settings, text='Опции',
+                  font=('Segoe UI', 16, 'bold')).pack(pady=(0, 18))
+
+        appearance = ttk.LabelFrame(settings, text='Внешний вид', padding=(18, 12))
+        appearance.pack(fill='x', pady=(0, 12))
         self.dark_theme_var = tk.BooleanVar(value=self.dark_theme)
-        ttk.Checkbutton(settings, text='Тёмная тема', variable=self.dark_theme_var,
-                        command=self._toggle_dark_theme).pack(pady=8)
+        ttk.Checkbutton(appearance, text='Тёмная тема',
+                        variable=self.dark_theme_var, command=self._toggle_dark_theme).pack(anchor='w', pady=4)
+
+        display = ttk.LabelFrame(settings, text='Окно', padding=(18, 12))
+        display.pack(fill='x')
         self.fullscreen_var = tk.BooleanVar(value=self.fullscreen)
-        ttk.Checkbutton(settings, text='Полноэкранный режим', variable=self.fullscreen_var,
-                        command=self._toggle_fullscreen).pack(pady=8)
-        ttk.Label(settings, text='Разрешение окна:').pack(pady=(12, 4))
+        ttk.Checkbutton(display, text='Полноэкранный режим',
+                        variable=self.fullscreen_var, command=self._toggle_fullscreen).pack(anchor='w', pady=(2, 8))
+        ttk.Label(display, text='Разрешение окна').pack(anchor='w', pady=(2, 4))
         self.resolution_var = tk.StringVar(value=self.window_resolution or 'Авто')
         resolution_box = ttk.Combobox(
-            settings, textvariable=self.resolution_var, state='readonly',
+            display, textvariable=self.resolution_var, state='readonly',
             values=self._resolution_options(), width=18,
         )
-        resolution_box.pack()
+        resolution_box.pack(anchor='w')
         resolution_box.bind('<<ComboboxSelected>>', self._change_resolution)
 
     def show_tournament(self):
         self.clear()
-        self._set_page_geometry('900x760')
-        frame = ttk.Frame(self.root, padding=18)
-        frame.pack(fill='both', expand=True)
+        page_scale = self._automatic_page_scale(900, 760)
+        self._set_page_geometry(f'{int(900 * page_scale)}x{int(760 * page_scale)}')
+        if page_scale < 0.95:
+            page = ttk.Frame(self.root)
+            page.pack(fill='both', expand=True)
+            page_canvas = tk.Canvas(page, highlightthickness=0,
+                                    background=self.ui_colors['background'])
+            page_scroll = ttk.Scrollbar(page, orient='vertical', command=page_canvas.yview)
+            page_canvas.configure(yscrollcommand=page_scroll.set)
+            page_canvas.pack(side='left', fill='both', expand=True)
+            page_scroll.pack(side='right', fill='y')
+            frame = ttk.Frame(page_canvas, padding=18)
+            page_window = page_canvas.create_window((0, 0), window=frame, anchor='nw')
+            frame.bind('<Configure>', lambda _event: page_canvas.configure(
+                scrollregion=page_canvas.bbox('all')))
+            page_canvas.bind('<Configure>', lambda event: page_canvas.itemconfigure(
+                page_window, width=event.width))
+        else:
+            frame = ttk.Frame(self.root, padding=18)
+            frame.pack(fill='both', expand=True)
         ttk.Button(frame, text='← На главную', command=self.show_home).pack(anchor='w', pady=(0, 12))
         self.heading(frame, 'Турнир')
         files = character_files_by_creation_date()
@@ -237,10 +376,15 @@ class CharacterApp:
         tables.pack(fill='x', pady=(4, 8))
         available_frame = ttk.Frame(tables)
         available_frame.pack(side='left', fill='both', expand=True)
+        self.tournament_search_var = tk.StringVar()
+        tournament_search = ttk.Entry(available_frame, textvariable=self.tournament_search_var)
+        tournament_search.pack(fill='x', pady=(0, 5))
+        self.tournament_search_var.trace_add('write', lambda *_args: self._filter_tournament_available())
         roster_frame = ttk.Frame(tables)
         roster_frame.pack(side='right', fill='both', expand=True, padx=(12, 0))
 
-        self.available_table = ttk.Treeview(available_frame, columns=('name',), show='headings', height=9, selectmode='browse')
+        table_height = max(4, int(9 * page_scale))
+        self.available_table = ttk.Treeview(available_frame, columns=('name',), show='headings', height=table_height, selectmode='browse')
         self.available_table.heading('name', text='Персонаж')
         self.available_table.column('name', anchor='w', width=260)
         self.available_table.pack(side='left', fill='both', expand=True)
@@ -255,7 +399,7 @@ class CharacterApp:
         ttk.Button(controls, text='Добавить →', command=self.add_to_roster).pack(pady=(32, 6))
         ttk.Button(controls, text='← Убрать', command=self.remove_from_roster).pack(pady=6)
 
-        self.roster_table = ttk.Treeview(roster_frame, columns=('name',), show='headings', height=9, selectmode='browse')
+        self.roster_table = ttk.Treeview(roster_frame, columns=('name',), show='headings', height=table_height, selectmode='browse')
         self.roster_table.heading('name', text='Ростер (0/20)')
         self.roster_table.column('name', anchor='w', width=260)
         self.roster_table.pack(side='left', fill='both', expand=True)
@@ -265,11 +409,13 @@ class CharacterApp:
 
         self.roster_count = ttk.Label(frame, text='Выбрано: 0 / 20')
         self.roster_count.pack(anchor='w', pady=(0, 6))
+        self.update_roster_count()
         actions = ttk.Frame(frame)
         actions.pack(anchor='w', pady=(0, 8))
         ttk.Button(actions, text='Автозаполнить: первые 20',
                    command=self.auto_fill_roster).pack(side='left', padx=(0, 8))
-        ttk.Button(actions, text='Провести турнир', command=self.start_tournament).pack(side='left')
+        ttk.Button(actions, text='Провести турнир', command=self.start_tournament,
+                   style='Primary.TButton').pack(side='left')
         self.tournament_tabs = ttk.Notebook(frame)
         self.tournament_tabs.pack(fill='both', expand=True)
         bracket_tab = ttk.Frame(self.tournament_tabs)
@@ -287,6 +433,8 @@ class CharacterApp:
             groups_tab.columnconfigure(index % 2, weight=1)
             table = ttk.Treeview(group_frame, columns=('rank', 'name', 'wins', 'score'),
                                  show='headings', height=5)
+            table.tag_configure('leader', background='#d9f2df' if not self.dark_theme else '#214a36',
+                                foreground='#176b35' if not self.dark_theme else '#a8efbd')
             for column, title, width, anchor in (
                 ('rank', '№', 32, 'center'), ('name', 'Персонаж', 145, 'w'),
                 ('wins', 'Победы', 62, 'center'), ('score', 'Очки', 72, 'center'),
@@ -295,22 +443,55 @@ class CharacterApp:
                 table.column(column, width=width, anchor=anchor, stretch=column == 'name')
             table.pack(fill='both', expand=True)
             self.group_tables[group_name] = table
+        bracket_toolbar = ttk.Frame(bracket_tab, padding=(8, 6))
+        bracket_toolbar.pack(fill='x')
+        ttk.Label(bracket_toolbar, text='Масштаб', style='Muted.TLabel').pack(side='left', padx=(0, 8))
+        ttk.Button(bracket_toolbar, text='−', width=3,
+                   command=lambda: self._zoom_tournament_bracket(0.85)).pack(side='left', padx=2)
+        ttk.Button(bracket_toolbar, text='Сбросить',
+                   command=self._reset_tournament_bracket_view).pack(side='left', padx=2)
+        ttk.Button(bracket_toolbar, text='Вписать в окно',
+                   command=self._fit_tournament_bracket).pack(side='left', padx=2)
+        ttk.Button(bracket_toolbar, text='+', width=3,
+                   command=lambda: self._zoom_tournament_bracket(1.18)).pack(side='left', padx=2)
+        ttk.Label(bracket_toolbar, text='Стрелки — перемещение · 0 — вписать',
+                  style='Muted.TLabel').pack(side='left', padx=(10, 0))
+        self.tournament_stage_label = ttk.Label(bracket_toolbar, text='Плей-офф',
+                                                style='Section.TLabel')
+        self.tournament_stage_label.pack(side='right', padx=(0, 10))
+        legend = ttk.Frame(bracket_toolbar)
+        legend.pack(side='right')
+        for title, background, foreground in (
+            ('Победитель', '#d8f3dc' if not self.dark_theme else '#254b39',
+             '#205c38' if not self.dark_theme else '#d7f5df'),
+            ('Выбыл', '#fce8e6' if not self.dark_theme else '#4a292c',
+             '#9f3838' if not self.dark_theme else '#f0b8b8'),
+        ):
+            badge = tk.Label(legend, text=title, bg=background, fg=foreground,
+                             font=('Segoe UI', 8, 'bold'), padx=8, pady=3)
+            badge.pack(side='left', padx=(6, 0))
         self.bracket_canvas = tk.Canvas(bracket_tab, width=1120, height=390,
-                                        highlightthickness=0, background='white', cursor='hand2')
+                                        highlightthickness=2, background=self.ui_colors['surface'],
+                                        cursor='fleur', takefocus=True,
+                                        highlightbackground=self.ui_colors['border'],
+                                        highlightcolor=self.ui_colors['accent'])
         self.bracket_canvas.bind(
-            '<ButtonPress-1>',
-            lambda event: self.bracket_canvas.scan_mark(event.x, event.y),
+            '<ButtonPress-1>', lambda event: self.bracket_canvas.scan_mark(event.x, event.y),
         )
         self.bracket_canvas.bind(
-            '<B1-Motion>',
-            lambda event: self.bracket_canvas.scan_dragto(event.x, event.y, gain=1),
+            '<B1-Motion>', lambda event: self.bracket_canvas.scan_dragto(event.x, event.y, gain=1),
         )
-        bracket_xscroll = ttk.Scrollbar(bracket_tab, orient='horizontal',
-                                        command=self.bracket_canvas.xview)
-        self.bracket_canvas.configure(xscrollcommand=bracket_xscroll.set,
-                                      scrollregion=(0, 0, 1120, 390))
+        self.bracket_canvas.bind('<Control-MouseWheel>', self._on_bracket_zoom_wheel)
+        for key in ('Left', 'Right', 'Up', 'Down'):
+            self.bracket_canvas.bind(f'<{key}>', self._pan_tournament_bracket_key)
+        self.bracket_canvas.bind('<Key-0>', lambda _event: self._fit_tournament_bracket())
+        bracket_xscroll = ttk.Scrollbar(bracket_tab, orient='horizontal', command=self.bracket_canvas.xview)
+        bracket_yscroll = ttk.Scrollbar(bracket_tab, orient='vertical', command=self.bracket_canvas.yview)
+        self.bracket_canvas.configure(xscrollcommand=bracket_xscroll.set, yscrollcommand=bracket_yscroll.set)
+        bracket_yscroll.pack(side='right', fill='y')
         self.bracket_canvas.pack(fill='both', expand=True)
         bracket_xscroll.pack(fill='x')
+        self.tournament_tabs.bind('<<NotebookTabChanged>>', self._on_tournament_tab_changed)
         self._draw_tournament_bracket(None)
         result_frame = ttk.Frame(report_tab)
         result_frame.pack(fill='both', expand=True)
@@ -322,6 +503,8 @@ class CharacterApp:
 
     def _draw_tournament_bracket(self, bracket):
         canvas = self.bracket_canvas
+        self.current_bracket = bracket
+        self.bracket_zoom = 1.0
         canvas.delete('all')
         foreground = '#e9edf2' if self.dark_theme else '#263448'
         card = '#252b33' if self.dark_theme else '#ffffff'
@@ -329,11 +512,13 @@ class CharacterApp:
         connector = '#64748b'
         champion_fill = '#d8f3dc' if not self.dark_theme else '#254b39'
         champion_text = '#205c38' if not self.dark_theme else '#d7f5df'
+        eliminated_fill = '#fce8e6' if not self.dark_theme else '#4a292c'
+        eliminated_text = '#9f3838' if not self.dark_theme else '#f0b8b8'
         canvas.configure(background='#17191c' if self.dark_theme else '#f0f0f0')
         columns = ((20, 'Четвертьфиналы'), (310, 'Полуфиналы'),
                    (600, 'Финал'), (890, 'Победитель'))
         for x, title in columns:
-            canvas.create_text(x, 18, text=title, anchor='w', fill=foreground,
+            canvas.create_text(x + 110, 18, text=title, anchor='center', fill=foreground,
                                font=('Segoe UI', 11, 'bold'))
 
         qf_y = (42, 129, 216, 303)
@@ -375,13 +560,17 @@ class CharacterApp:
                                     fill=card, outline=connector, width=1)
             for row, (name, score) in enumerate(zip(names, scores)):
                 is_winner = name == winner
+                is_eliminated = winner is not None and not is_winner
                 line_y = y + 18 + row * 25
-                if is_winner:
+                if is_winner or is_eliminated:
                     canvas.create_rectangle(x + 1, line_y - 11, x + card_width - 1,
-                                            line_y + 11, fill=champion_fill, outline='')
+                                            line_y + 11,
+                                            fill=champion_fill if is_winner else eliminated_fill,
+                                            outline='')
                 canvas.create_text(x + 10, line_y, text=textwrap.shorten(name, 24),
-                                   anchor='w', fill=champion_text if is_winner else foreground,
-                                   font=('Segoe UI', 9, 'bold' if is_winner else 'normal'))
+                                   anchor='w',
+                                   fill=champion_text if is_winner else eliminated_text if is_eliminated else foreground,
+                                   font=('Segoe UI', 9, 'bold' if is_winner or is_eliminated else 'normal'))
                 canvas.create_text(x + card_width - 10, line_y, text=str(score),
                                    anchor='e', fill=muted, font=('Segoe UI', 9, 'bold'))
 
@@ -396,6 +585,95 @@ class CharacterApp:
                                 fill=champion_fill, outline=connector, width=1)
         canvas.create_text(1000, champion_y + card_height / 2, text=textwrap.shorten(champion, 24),
                            fill=champion_text, font=('Segoe UI', 10, 'bold'))
+        bounds = canvas.bbox('all')
+        if bounds:
+            canvas.configure(scrollregion=bounds)
+            self.root.after(50, self._fit_tournament_bracket)
+
+    def _on_tournament_tab_changed(self, _event=None):
+        selected_tab = self.tournament_tabs.index('current')
+        stage_names = ('Плей-офф', 'Групповой этап', 'Отчёт')
+        if hasattr(self, 'tournament_stage_label'):
+            self.tournament_stage_label.configure(text=stage_names[selected_tab])
+        if selected_tab == 0:
+            self.root.after_idle(self._fit_tournament_bracket)
+
+    def _fit_tournament_bracket(self):
+        if not hasattr(self, 'bracket_canvas') or not self.bracket_canvas.winfo_exists():
+            return
+        if self.tournament_tabs.index('current') != 0:
+            return
+        canvas = self.bracket_canvas
+        bounds = canvas.bbox('all')
+        if not bounds:
+            return
+        content_width = max(1, bounds[2] - bounds[0])
+        content_height = max(1, bounds[3] - bounds[1])
+        viewport_width = max(1, canvas.winfo_width() - 8)
+        viewport_height = max(1, canvas.winfo_height() - 8)
+        current_zoom = max(0.01, getattr(self, 'bracket_zoom', 1.0))
+        base_width = content_width / current_zoom
+        base_height = content_height / current_zoom
+        target_zoom = min(1.0, viewport_width / base_width, viewport_height / base_height)
+        target_zoom = max(0.25, target_zoom)
+        factor = target_zoom / current_zoom
+        canvas.scale('all', 0, 0, factor, factor)
+        self.bracket_zoom = target_zoom
+        bounds = canvas.bbox('all')
+        if bounds:
+            canvas.configure(scrollregion=bounds)
+        canvas.xview_moveto(0)
+        canvas.yview_moveto(0)
+
+    def _pan_tournament_bracket_key(self, event):
+        if event.keysym == 'Left':
+            self.bracket_canvas.xview_scroll(-1, 'units')
+        elif event.keysym == 'Right':
+            self.bracket_canvas.xview_scroll(1, 'units')
+        elif event.keysym == 'Up':
+            self.bracket_canvas.yview_scroll(-1, 'units')
+        elif event.keysym == 'Down':
+            self.bracket_canvas.yview_scroll(1, 'units')
+        return 'break'
+
+    def _zoom_tournament_bracket(self, factor):
+        if not hasattr(self, 'bracket_canvas') or not self.bracket_canvas.winfo_exists():
+            return
+        next_zoom = getattr(self, 'bracket_zoom', 1.0) * factor
+        if not 0.25 <= next_zoom <= 2.4:
+            return
+        canvas = self.bracket_canvas
+        anchor_x = canvas.canvasx(max(1, canvas.winfo_width()) / 2)
+        anchor_y = canvas.canvasy(max(1, canvas.winfo_height()) / 2)
+        canvas.scale('all', anchor_x, anchor_y, factor, factor)
+        self.bracket_zoom = next_zoom
+        bounds = canvas.bbox('all')
+        if bounds:
+            canvas.configure(scrollregion=bounds)
+
+    def _on_bracket_zoom_wheel(self, event):
+        self._zoom_tournament_bracket(1.12 if event.delta > 0 else 0.89)
+        return 'break'
+
+    def _reset_tournament_bracket_view(self):
+        self._draw_tournament_bracket(getattr(self, 'current_bracket', None))
+
+    def _filter_tournament_available(self):
+        if not hasattr(self, 'available_table') or not self.available_table.winfo_exists():
+            return
+        query = self.tournament_search_var.get().strip().casefold()
+        for item in self.available_table.get_children():
+            self.available_table.delete(item)
+        roster_names = {
+            self.tournament_files[int(item)].stem.casefold()
+            for item in self.roster_table.get_children()
+        } if hasattr(self, 'roster_table') and self.roster_table.winfo_exists() else set()
+        for index, path in enumerate(self.tournament_files):
+            if query and query not in path.stem.casefold():
+                continue
+            if path.stem.casefold() in roster_names:
+                continue
+            self.available_table.insert('', 'end', iid=str(index), values=(path.stem,))
 
     def add_to_roster(self):
         selection = self.available_table.selection()
@@ -426,7 +704,8 @@ class CharacterApp:
             table = self.group_tables[group['name']]
             table.delete(*table.get_children())
             for player in group['standings']:
-                table.insert('', 'end', values=(
+                tags = ('leader',) if player['rank'] == 1 else ()
+                table.insert('', 'end', tags=tags, values=(
                     player['rank'], player['name'], player['wins'],
                     f"{player['for']}:{player['against']}",
                 ))
@@ -442,6 +721,7 @@ class CharacterApp:
         count = len(self.roster_table.get_children())
         self.roster_table.heading('name', text=f'Ростер ({count}/20)')
         self.roster_count.configure(text=f'Выбрано: {count} / 20')
+        self._filter_tournament_available()
 
     def start_tournament(self):
         selected = self.roster_table.get_children()
@@ -461,55 +741,129 @@ class CharacterApp:
 
     def show_fight(self):
         self.clear()
-        page_scale = self._automatic_page_scale(600, 640)
-        self._set_page_geometry(f'{int(600 * page_scale)}x{int(640 * page_scale)}')
-        frame = ttk.Frame(self.root, padding=18)
-        frame.pack(fill='both', expand=True)
-        ttk.Button(frame, text='\u2190 \u041d\u0430 \u0433\u043b\u0430\u0432\u043d\u0443\u044e', command=self.show_home).pack(anchor='w', pady=(0, 12))
-        self.heading(frame, '\u0421\u0440\u0430\u0436\u0435\u043d\u0438\u0435 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u0436\u0435\u0439')
+        page_scale = self._automatic_page_scale(900, 760)
+        self._set_page_geometry(f'{int(900 * page_scale)}x{int(760 * page_scale)}')
+        if page_scale < 0.95:
+            page = ttk.Frame(self.root)
+            page.pack(fill='both', expand=True)
+            page_canvas = tk.Canvas(page, highlightthickness=0,
+                                    background=self.ui_colors['background'])
+            page_scroll = ttk.Scrollbar(page, orient='vertical', command=page_canvas.yview)
+            page_canvas.configure(yscrollcommand=page_scroll.set)
+            page_canvas.pack(side='left', fill='both', expand=True)
+            page_scroll.pack(side='right', fill='y')
+            frame = ttk.Frame(page_canvas, padding=18)
+            page_window = page_canvas.create_window((0, 0), window=frame, anchor='nw')
+            frame.bind('<Configure>', lambda _event: page_canvas.configure(
+                scrollregion=page_canvas.bbox('all')))
+            page_canvas.bind('<Configure>', lambda event: page_canvas.itemconfigure(
+                page_window, width=event.width))
+        else:
+            frame = ttk.Frame(self.root, padding=18)
+            frame.pack(fill='both', expand=True)
+        ttk.Button(frame, text='← На главную', command=self.show_home).pack(anchor='w', pady=(0, 12))
+        self.heading(frame, 'Сражение персонажей')
         files = character_files_by_creation_date()
         if len(files) < 2:
-            ttk.Label(frame, text='\u0414\u043b\u044f \u0441\u0440\u0430\u0436\u0435\u043d\u0438\u044f \u043d\u0443\u0436\u043d\u043e \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043c\u0438\u043d\u0438\u043c\u0443\u043c \u0434\u0432\u0443\u0445 \u043f\u0435\u0440\u0441\u043e\u043d\u0430\u0436\u0435\u0439.').pack(anchor='w')
+            ttk.Label(frame, text='Для сражения нужно сохранить минимум двух персонажей.').pack(anchor='w')
             return
         self.fight_files = files
         names = [file.stem for file in files]
         row = ttk.Frame(frame)
         row.pack(fill='x', pady=(0, 8))
-        left = ttk.Frame(row, width=125)
-        left.pack(side='left', fill='y', expand=True)
-        center = ttk.Frame(row, width=270)
-        center.pack(side='left', fill='y')
-        right = ttk.Frame(row, width=125)
-        right.pack(side='left', fill='y', expand=True)
-        ttk.Label(left, text='\u041f\u0435\u0440\u0432\u044b\u0439 \u0431\u043e\u0435\u0446', anchor='center').pack(fill='x', pady=(0, 4))
+        compact_fight_layout = page_scale < 0.95
+        left = ttk.LabelFrame(row, text='Боец 1', padding=8)
+        center = ttk.LabelFrame(row, text='Арена', padding=8)
+        right = ttk.LabelFrame(row, text='Боец 2', padding=8)
+        if compact_fight_layout:
+            center.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 8))
+            left.grid(row=1, column=0, sticky='nsew', padx=(0, 4))
+            right.grid(row=1, column=1, sticky='nsew', padx=(4, 0))
+            for column in (0, 1):
+                row.columnconfigure(column, weight=1, uniform='fighter')
+        else:
+            left.pack(side='left', fill='y', expand=True, padx=(0, 8))
+            center.pack(side='left', fill='y')
+            right.pack(side='left', fill='y', expand=True, padx=(8, 0))
         self.first_fighter = ttk.Combobox(left, state='readonly', values=names)
         self.first_fighter.pack(fill='x', padx=3)
-        ttk.Label(right, text='\u0412\u0442\u043e\u0440\u043e\u0439 \u0431\u043e\u0435\u0446', anchor='center').pack(fill='x', pady=(0, 4))
         self.second_fighter = ttk.Combobox(right, state='readonly', values=names)
         self.second_fighter.pack(fill='x', padx=3)
         self.first_fighter.current(0)
         self.second_fighter.current(1)
+        self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
+        self.fight_rotation = 0
         self.fight_portrait_canvases = []
+        self.fight_stat_labels = []
+        self.fight_panels = (left, right)
+        self.fight_outcome_labels = []
         for panel in (left, right):
-            portrait = tk.Canvas(panel, width=115, height=172, highlightthickness=0,
+            outcome = tk.Label(panel, text='', font=('Segoe UI', 10, 'bold'),
+                               background='#20242a' if self.dark_theme else '#f0f0f0',
+                               foreground='#e9edf2' if self.dark_theme else '#263448')
+            outcome.pack(fill='x', pady=(4, 0))
+            outcome.pack_forget()
+            self.fight_outcome_labels.append(outcome)
+            portrait = tk.Canvas(panel, width=130, height=195, highlightthickness=0,
                                  background='#20242a' if self.dark_theme else '#e8e2d8')
             portrait.pack(pady=(6, 0))
             self.fight_portrait_canvases.append(portrait)
+            card_bg = '#20242a' if self.dark_theme else '#fffaf0'
+            card = tk.Frame(panel, background=card_bg, highlightthickness=1,
+                            highlightbackground='#c69b4b' if self.dark_theme else '#d6bd88')
+            card.pack(fill='x', padx=3, pady=(5, 0), anchor='nw')
+            self.fight_stat_labels.append(card)
         self.fight_portrait_sources = {}
-        self.first_fighter.bind('<<ComboboxSelected>>', lambda _event: self._draw_fight_portrait(0))
-        self.second_fighter.bind('<<ComboboxSelected>>', lambda _event: self._draw_fight_portrait(1))
+        self.first_fighter.bind('<<ComboboxSelected>>', lambda _event: self._on_fight_selection_changed(0))
+        self.second_fighter.bind('<<ComboboxSelected>>', lambda _event: self._on_fight_selection_changed(1))
         self.fight_status = ttk.Label(center, text='', anchor='center')
         self.fight_status.pack(fill='x', pady=(0, 4))
         wheel_scale = self._wheel_scale(600, 640)
-        self.fight_wheel = tk.Canvas(center, width=int(270 * wheel_scale), height=int(220 * wheel_scale),
+        self.fight_wheel = tk.Canvas(center, width=int(280 * wheel_scale), height=int(280 * wheel_scale),
                                      highlightthickness=0, background='#20242a' if self.dark_theme else '#f0f0f0')
         self.fight_wheel.pack(pady=(0, 6))
         self._draw_fight_wheel(names[0], names[1], 0)
-        self.fight_button = ttk.Button(center, text='\u041d\u0430\u0447\u0430\u0442\u044c \u0441\u0440\u0430\u0436\u0435\u043d\u0438\u0435', command=self.start_fight)
+        self.fight_button = ttk.Button(center, text='Начать сражение',
+                                       command=self.start_fight, style='Primary.TButton')
         self.fight_button.pack()
+        history_frame = ttk.LabelFrame(frame, text='История раундов', padding=6)
+        history_frame.pack(fill='x', pady=(8, 0))
+        self.fight_history = ttk.Treeview(
+            history_frame, columns=('round', 'attribute', 'score', 'winner'),
+            show='headings', height=max(2, min(3, int(4 * page_scale))), selectmode='none',
+        )
+        for column, title, width in (
+            ('round', 'Раунд', 70), ('attribute', 'Параметр', 240),
+            ('score', 'Счёт', 100), ('winner', 'Победитель', 220),
+        ):
+            self.fight_history.heading(column, text=title)
+            self.fight_history.column(column, width=width, minwidth=60, anchor='center',
+                                      stretch=column in ('attribute', 'winner'))
+        self.fight_history.pack(fill='x')
+        self.fight_history.tag_configure('first-wins', foreground='#25834b' if not self.dark_theme else '#91e2ac')
+        self.fight_history.tag_configure('second-wins', foreground='#c34747' if not self.dark_theme else '#ffaaaa')
         self._draw_fight_portrait(0)
         self._draw_fight_portrait(1)
         self.fight_result = self.make_text(frame)
+        self.fight_result.pack_forget()
+        self.fight_result.configure(height=4)
+        self.fight_result.pack(fill='x', expand=False, pady=(4, 0))
+
+    def _on_fight_selection_changed(self, fighter_index):
+        for panel, outcome, stats_card, portrait in zip(
+            self.fight_panels, self.fight_outcome_labels,
+            self.fight_stat_labels, self.fight_portrait_canvases,
+        ):
+            outcome.pack_forget()
+            panel.configure(style='TLabelframe')
+            stats_card.configure(
+                background='#20242a' if self.dark_theme else '#fffaf0',
+                highlightbackground='#c69b4b' if self.dark_theme else '#d6bd88',
+            )
+            portrait.configure(highlightthickness=0)
+        self._draw_fight_portrait(fighter_index)
+        self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
+        self._draw_fight_wheel(*self.fight_names, getattr(self, 'fight_rotation', 0))
 
     def _draw_fight_portrait(self, fighter_index):
         selector = self.first_fighter if fighter_index == 0 else self.second_fighter
@@ -528,6 +882,45 @@ class CharacterApp:
             if separator:
                 properties[key.strip()] = value.strip()
 
+        def readable(value):
+            try:
+                return value.encode('latin-1').decode('utf-8')
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                try:
+                    return value.encode('cp1251').decode('utf-8')
+                except (UnicodeEncodeError, UnicodeDecodeError):
+                    return value
+
+        stats_card = self.fight_stat_labels[fighter_index]
+        for child in stats_card.winfo_children():
+            child.destroy()
+        card_bg = '#20242a' if self.dark_theme else '#fffaf0'
+        main_fg = '#f4ead6' if self.dark_theme else '#332b20'
+        muted_fg = '#d7b76f' if self.dark_theme else '#8b672a'
+        tk.Label(stats_card, text='ХАРАКТЕРИСТИКИ',
+                 font=('Segoe UI', 10, 'bold'), bg=card_bg, fg=muted_fg,
+                 anchor='center').pack(fill='x', padx=4, pady=(5, 3))
+        stat_fields = (
+            ('Раса', 'race'), ('Подраса', 'subrace'),
+            ('Рост', 'size'), ('Сила', 'strength'),
+            ('Скорость', 'speed'),
+            ('Интеллект', 'iq'),
+            ('Бой', 'fighting'), ('Оружие', 'weapon'),
+            ('Мастерство', 'weapon_mastery'),
+            ('Чары', 'weapon_enchantment'),
+            ('Сила', 'ability'), ('Титул', 'title'),
+        )
+        for label_text, key in stat_fields:
+            value = properties.get(key, '')
+            if not value or value.casefold() == 'none':
+                continue
+            row = tk.Frame(stats_card, bg=card_bg)
+            row.pack(fill='x', padx=5, pady=1)
+            tk.Label(row, text=label_text, font=('Segoe UI', 9, 'bold'),
+                     bg=card_bg, fg=muted_fg, anchor='nw').pack(anchor='w')
+            tk.Label(row, text=readable(value), font=('Segoe UI', 9), bg=card_bg,
+                     fg=main_fg, justify='left', anchor='nw', wraplength=170).pack(fill='x', anchor='w')
+
         templates = dict(zip((race.casefold() for race in data.race_sum), ('human', 'orc', 'elf')))
         aliases = dict(templates)
         for race, template in templates.items():
@@ -537,12 +930,12 @@ class CharacterApp:
                 pass
         template = aliases.get(properties.get('race', '').casefold())
         if not template:
-            canvas.create_text(57, 86, text=selector.get(), width=105,
+            canvas.create_text(65, 97, text=selector.get(), width=120,
                                fill='#f1f3f5' if self.dark_theme else '#202124')
             return
 
         root = Path(__file__).resolve().parent / 'CardTemplates'
-        for kind in ('races', 'characters'):
+        for kind in ('races',):
             key = (kind, template)
             if key in self.fight_portrait_sources:
                 continue
@@ -551,14 +944,35 @@ class CharacterApp:
                 continue
             try:
                 image = tk.PhotoImage(file=str(image_path))
-                scale = max(1, math.ceil(max(image.width() / 115, image.height() / 172)))
+                scale = max(1, math.ceil(max(image.width() / 130, image.height() / 195)))
                 self.fight_portrait_sources[key] = image.subsample(scale, scale)
             except tk.TclError:
                 pass
         background = self.fight_portrait_sources.get(('races', template))
-        character = self.fight_portrait_sources.get(('characters', template))
         if background:
-            canvas.create_image(57, 86, image=background, anchor='center')
+            canvas.create_image(65, 97, image=background, anchor='center')
+        size_names = dict(zip((size.casefold() for size in data.size_sum), (120, 140, 160, 180)))
+        for size, target in zip(data.size_sum, (120, 140, 160, 180)):
+            try:
+                size_names[size.encode('utf-8').decode('cp1251').casefold()] = target
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+        target_height = size_names.get(properties.get('size', '').casefold(), 140)
+        source_key = ('character_source', template)
+        if source_key not in self.fight_portrait_sources:
+            character_path = root / 'characters' / f'{template}.png'
+            if character_path.exists():
+                try:
+                    self.fight_portrait_sources[source_key] = tk.PhotoImage(file=str(character_path))
+                except tk.TclError:
+                    pass
+        character_key = ('characters', template, target_height)
+        character = self.fight_portrait_sources.get(character_key)
+        source = self.fight_portrait_sources.get(source_key)
+        if character is None and source is not None:
+            scale = max(1, math.ceil(source.height() / target_height))
+            character = source.subsample(scale, scale)
+            self.fight_portrait_sources[character_key] = character
         if character:
             weapon_files = ('katana', 'axe', 'sword', 'pistol', 'tank', 'portal_cannon')
             weapon_aliases = dict(zip((name.casefold() for name in data.weapon_sum[1:]), weapon_files))
@@ -569,26 +983,37 @@ class CharacterApp:
                     pass
             weapon_template = weapon_aliases.get(properties.get('weapon', '').casefold())
             if weapon_template:
-                weapon_key = ('weapons', weapon_template)
+                target_weapon_size = max(16, round(32 * target_height / 140))
+                weapon_key = ('weapons', weapon_template, target_weapon_size)
                 if weapon_key not in self.fight_portrait_sources:
                     weapon_path = root / 'weapons' / f'{weapon_template}.png'
                     if weapon_path.exists():
                         try:
                             source = tk.PhotoImage(file=str(weapon_path))
-                            scale = max(1, math.ceil(max(source.width() / 58, source.height() / 58)))
+                            scale = max(1, math.ceil(max(
+                                source.width() / target_weapon_size,
+                                source.height() / target_weapon_size,
+                            )))
                             self.fight_portrait_sources[weapon_key] = source.subsample(scale, scale)
                         except tk.TclError:
                             pass
                 weapon = self.fight_portrait_sources.get(weapon_key)
                 if weapon:
-                    hand_x = 57 - character.width() / 2 + character.width() * 0.16
-                    hand_y = 166 - character.height() * 0.62
+                    hand_fraction = {'human': 0.17, 'orc': 0.12, 'elf': 0.17}.get(template, 0.16)
+                    hand_x = 65 - character.width() / 2 + character.width() * hand_fraction
+                    hand_y = 189 - character.height() * 0.62
                     if weapon_template == 'tank':
                         x, y = hand_x - weapon.width() * 0.58, hand_y - weapon.height() * 0.62
                     else:
-                        x, y = hand_x - weapon.width() * 0.78, hand_y - weapon.height() * 0.78
+                        grip_anchors = {
+                            'katana': (0.90, 0.91), 'axe': (0.92, 0.93),
+                            'sword': (0.90, 0.91), 'pistol': (0.83, 0.76),
+                            'portal_cannon': (0.90, 0.90),
+                        }
+                        grip_x, grip_y = grip_anchors.get(weapon_template, (0.9, 0.9))
+                        x, y = hand_x - weapon.width() * grip_x, hand_y - weapon.height() * grip_y
                     canvas.create_image(x, y, image=weapon, anchor='nw')
-            canvas.create_image(57, 166, image=character, anchor='s')
+            canvas.create_image(65, 189, image=character, anchor='s')
 
     def start_fight(self):
         first_index = self.first_fighter.current()
@@ -605,12 +1030,27 @@ class CharacterApp:
             messagebox.showerror('Ошибка сражения', str(error))
             return
         self.fight_button.configure(state='disabled')
+        self.first_fighter.configure(state='disabled')
+        self.second_fighter.configure(state='disabled')
         self.set_text(self.fight_result, '')
         self.fight_rounds = result['comparisons']
         self.fight_report = result['report']
+        self.fight_winner_index = 0 if result['winner'] == result['first_name'] else 1
+        self.fight_winner = self.fight_names[self.fight_winner_index]
         self.fight_round_index = 0
         self.fight_rotation = 0
         self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
+        self.fight_history.delete(*self.fight_history.get_children())
+        self.fight_status.configure(style='TLabel', wraplength=0)
+        for panel, outcome, stats_card, portrait in zip(
+            self.fight_panels, self.fight_outcome_labels,
+            self.fight_stat_labels, self.fight_portrait_canvases,
+        ):
+            outcome.pack_forget()
+            panel.configure(style='TLabelframe')
+            stats_card.configure(background='#20242a' if self.dark_theme else '#fffaf0')
+            stats_card.configure(highlightbackground='#c69b4b' if self.dark_theme else '#d6bd88')
+            portrait.configure(highlightthickness=0)
         self._spin_fight_round()
 
     def _draw_fight_wheel(self, first_name, second_name, rotation, first_points=1, second_points=1):
@@ -656,7 +1096,46 @@ class CharacterApp:
             )
             self.fight_status.configure(text='Сражение завершено')
             self.set_text(self.fight_result, self.fight_report)
+            winner = self.fight_winner
+            winner_index = self.fight_winner_index
+            win_bg = '#d9f2df' if not self.dark_theme else '#214a36'
+            lose_bg = '#f8dddd' if not self.dark_theme else '#542d32'
+            win_fg = '#176b35' if not self.dark_theme else '#a8efbd'
+            lose_fg = '#a12d35' if not self.dark_theme else '#ffb5b5'
+            for index, (panel, outcome, stats_card, portrait) in enumerate(zip(
+                self.fight_panels, self.fight_outcome_labels,
+                self.fight_stat_labels, self.fight_portrait_canvases,
+            )):
+                is_winner = index == winner_index
+                color = '#25834b' if is_winner else '#c34747'
+                background = win_bg if is_winner else lose_bg
+                foreground = win_fg if is_winner else lose_fg
+                style_name = f'Fight.{"Winner" if is_winner else "Loser"}.TLabelframe'
+                self.style.configure(style_name, bordercolor=color, background=background)
+                self.style.configure(f'{style_name}.Label', foreground=foreground, background=background)
+                panel.configure(style=style_name)
+                outcome.configure(
+                    text='ПОБЕДИТЕЛЬ' if is_winner else 'ПОРАЖЕНИЕ',
+                    background=background, foreground=foreground,
+                )
+                outcome.pack(fill='x', pady=(4, 0))
+                stats_card.configure(background=background, highlightbackground=color)
+                for row in stats_card.winfo_children():
+                    row.configure(background=background)
+                    for label in row.winfo_children():
+                        label.configure(background=background)
+                portrait.configure(highlightthickness=3, highlightbackground=color)
+            banner_bg = '#d9f2df' if not self.dark_theme else '#214a36'
+            banner_fg = '#176b35' if not self.dark_theme else '#a8efbd'
+            self.style.configure('FightWinner.TLabel', background=banner_bg, foreground=banner_fg,
+                                 font=('Segoe UI', 14, 'bold'), padding=(10, 8))
+            self.fight_status.configure(
+                text=f'✦ ПОБЕДИТЕЛЬ: {winner} ✦', style='FightWinner.TLabel',
+                wraplength=270, justify='center',
+            )
             self.fight_button.configure(state='normal')
+            self.first_fighter.configure(state='readonly')
+            self.second_fighter.configure(state='readonly')
             return
 
         comparison = self.fight_rounds[self.fight_round_index]
@@ -688,6 +1167,13 @@ class CharacterApp:
                 return
             self.fight_rotation = target
             self.fight_status.configure(text=f"{comparison['attribute']}: {comparison['winner']}")
+            row_tag = 'first-wins' if comparison['winner'] == comparison['first_name'] else 'second-wins'
+            round_item = self.fight_history.insert('', 'end', tags=(row_tag,), values=(
+                self.fight_round_index + 1, comparison['attribute'],
+                f"{comparison['first_points']}:{comparison['second_points']}",
+                comparison['winner'],
+            ))
+            self.fight_history.see(round_item)
             self.fight_round_index += 1
             self.spin_after_id = self.root.after(550, self._spin_fight_round)
 
@@ -695,38 +1181,132 @@ class CharacterApp:
 
     def show_create(self):
         self.clear()
-        page_scale = self._automatic_page_scale(760, 850)
-        self._set_page_geometry(f'{int(760 * page_scale)}x{int(850 * page_scale)}')
-        frame = ttk.Frame(self.root, padding=18)
+        page_scale = self._automatic_page_scale(920, 850)
+        self._set_page_geometry(f'{int(920 * page_scale)}x{int(850 * page_scale)}')
+        frame = ttk.Frame(self.root, padding=(28, 22))
         frame.pack(fill='both', expand=True)
-        ttk.Button(frame, text='← На главную', command=self.show_home).pack(anchor='w', pady=(0, 10))
-        self.heading(frame, 'Создание персонажа')
-        ttk.Label(frame, text='Имя героя:').pack(anchor='w', pady=(0, 4))
-        self.name_var = tk.StringVar()
-        self.name_entry = ttk.Entry(frame, textvariable=self.name_var)
-        self.name_entry.pack(fill='x')
-        self.name_entry.bind('<Return>', lambda _event: self.generate())
-        self.generate_button = ttk.Button(frame, text='Начать генерацию', command=self.generate)
-        self.generate_button.pack(anchor='w', pady=8)
-        self.wheel_status = ttk.Label(frame, text='Каждый атрибут будет выбираться 10 секунд.')
-        self.wheel_status.pack(anchor='w', pady=(0, 2))
-        self.wheel_selection = ttk.Label(frame, text='')
-        self.wheel_selection.pack(anchor='w', pady=(0, 4))
-        self.skip_spin_button = ttk.Button(
-            frame, text='Пропустить прокрутку', command=self._skip_current_spin,
-            state='disabled',
+        ttk.Button(frame, text='← На главную', command=self.show_home).pack(
+            anchor='w', pady=(0, 8)
         )
-        self.skip_spin_button.pack(anchor='w', pady=(0, 4))
-        wheel_size = int(430 * self._wheel_scale(760, 850))
+        self.heading(frame, 'Создание персонажа')
+
+        form = ttk.Frame(frame)
+        form.pack(fill='x', pady=(0, 12))
+        ttk.Label(form, text='Имя героя').pack(anchor='w', pady=(0, 4))
+        self.name_var = tk.StringVar()
+        name_validator = self.root.register(self._name_characters_allowed)
+        self.name_entry = ttk.Entry(form, textvariable=self.name_var, width=28,
+                                    validate='key', validatecommand=(name_validator, '%P'))
+        self.name_entry.pack(side='left', anchor='w')
+        self.name_entry.bind('<Return>', lambda _event: self.generate())
+        self.generate_button = ttk.Button(
+            form, text='Начать генерацию',
+            command=self.generate, style='Primary.TButton',
+        )
+        self.generate_button.pack(side='left', padx=(10, 0))
+
+        progress_row = ttk.Frame(frame)
+        progress_row.pack(fill='x', pady=(0, 12))
+        self.create_progress_label = ttk.Label(progress_row, text='Подготовьтесь к генерации',
+                                               style='Muted.TLabel')
+        self.create_progress_label.pack(anchor='w', pady=(0, 5))
+        self.create_progress = ttk.Progressbar(progress_row, mode='determinate', maximum=1, value=0,
+                                               style='Creation.Horizontal.TProgressbar')
+        self.create_progress.pack(fill='x')
+
+        content = ttk.Frame(frame)
+        content.pack(fill='both', expand=True)
+        wheel_panel = ttk.LabelFrame(content, text='Случайный выбор', padding=12)
+        wheel_panel.pack(side='left', fill='both', expand=True, padx=(0, 12))
+        self.wheel_status = ttk.Label(wheel_panel, text='Каждый атрибут выбирается отдельно.',
+                                       anchor='center', style='Muted.TLabel')
+        self.wheel_status.pack(fill='x', pady=(0, 2))
+        self.wheel_selection = ttk.Label(wheel_panel, text='', anchor='center', font=('Segoe UI', 11, 'bold'))
+        self.wheel_selection.pack(fill='x', pady=(0, 5))
+        wheel_size = int(390 * self._wheel_scale(920, 850))
         self.wheel_canvas = tk.Canvas(
-            frame, width=wheel_size, height=wheel_size, highlightthickness=1,
-            highlightbackground='#777777', background='white',
+            wheel_panel, width=wheel_size, height=wheel_size, highlightthickness=1,
+            highlightbackground=self.ui_colors['border'], background=self.ui_colors['surface'],
         )
         self.wheel_canvas.pack(pady=4)
         self._draw_wheel(data.substory_sum, 0)
-        self.result = tk.Text(frame, wrap='word', state='disabled', font=('Segoe UI', 9), height=6)
-        self.result.pack(fill='both', expand=True, pady=(4, 0))
+        self.fast_spin_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(wheel_panel, text='Быстрое вращение',
+                        variable=self.fast_spin_var).pack(pady=(2, 0))
+        self.skip_spin_button = ttk.Button(
+            wheel_panel, text='Пропустить этот шаг',
+            command=self._skip_current_spin, state='disabled', style='Skip.TButton',
+        )
+        self.skip_spin_button.pack(pady=(5, 0))
+        summary = ttk.LabelFrame(content, text='Карточка героя', padding=14)
+        summary.pack(side='right', fill='y', padx=(0, 2))
+        summary.configure(width=220)
+        summary.pack_propagate(False)
+        self.create_summary_rows = {}
+        self.create_summary_name = ttk.Label(summary, text='Новый герой',
+                                              font=('Segoe UI', 13, 'bold'), wraplength=180)
+        self.create_summary_name.pack(anchor='w', pady=(0, 12))
+        for label, key in (
+            ('Происхождение', 'substory'),
+            ('Раса', 'race_line'), ('Рост', 'size'),
+            ('Сила', 'strength'), ('Скорость', 'speed'),
+            ('Ум', 'iq'), ('Боевые навыки', 'fighting'),
+            ('Оружие', 'weapon'), ('Владение', 'weapon_mastery'),
+            ('Зачарование', 'weapon_enchantment'),
+            ('Способность', 'ability'),
+            ('Мощь', 'ability_power'), ('Хаос', 'chaos'),
+            ('Титул', 'title'),
+        ):
+            row = ttk.Frame(summary)
+            row.pack(fill='x', pady=3)
+            ttk.Label(row, text=label, style='Muted.TLabel', wraplength=180).pack(anchor='w')
+            value_label = ttk.Label(row, text='—', wraplength=180, font=('Segoe UI', 9, 'bold'))
+            value_label.pack(anchor='w', pady=(0, 3))
+            self.create_summary_rows[key] = value_label
+
+        self.result = tk.Text(frame, wrap='word', state='disabled', font=('Segoe UI', 9), height=4,
+                              relief='flat', padx=10, pady=8)
+        self.result.pack(fill='x', expand=False, pady=(10, 0))
         self.name_entry.focus_set()
+
+    @staticmethod
+    def _readable_creation_value(value):
+        text = str(value)
+        try:
+            return text.encode('cp1251').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return text
+
+    def _update_creation_summary(self):
+        hero = self.current_hero
+        self.create_summary_name.configure(text=self._readable_creation_value(hero.name))
+        values = {
+            'substory': getattr(hero, 'substory', None),
+            'race_line': ' '.join(filter(None, (
+                getattr(hero, 'subrace', None), getattr(hero, 'race', None),
+            ))),
+            'size': getattr(hero, 'size', None), 'strength': getattr(hero, 'strength', None),
+            'speed': getattr(hero, 'speed', None), 'iq': getattr(hero, 'iq', None),
+            'fighting': getattr(hero, 'fighting', None), 'weapon': getattr(hero, 'weapon', None),
+            'weapon_mastery': getattr(hero, 'weapon_mastery', None),
+            'weapon_enchantment': getattr(hero, 'weapon_enchantment', None),
+            'ability': getattr(hero, 'ability', None), 'ability_power': getattr(hero, 'ability_power', None),
+            'chaos': getattr(hero, 'chaos', None), 'title': getattr(hero, 'title', None),
+        }
+        for key, widget in self.create_summary_rows.items():
+            value = values.get(key)
+            widget.configure(text=self._readable_creation_value(value) if value not in (None, '') else '—')
+
+    def _update_creation_progress(self):
+        total = max(1, len(self.wheel_steps))
+        completed = min(self.spin_index, total)
+        self.create_progress.configure(maximum=total, value=completed)
+        if completed >= total:
+            text = 'Генерация завершена'
+        else:
+            current_step = self._readable_creation_value(self.wheel_steps[completed][0])
+            text = f'Шаг {completed + 1} из {total}  ·  {current_step}'
+        self.create_progress_label.configure(text=text)
 
     def _make_wheel_steps(self, hero):
         def simple_step(label, attribute, options, weights):
@@ -818,6 +1398,7 @@ class CharacterApp:
         return len(weights) - 1
 
     def _spin_next(self):
+        self._update_creation_progress()
         if self.spin_index >= len(self.wheel_steps):
             try:
                 main.file_creation(self.current_hero)
@@ -845,7 +1426,7 @@ class CharacterApp:
         segment_extent = 360 * weights[selected_index] / total_weight
         desired_rotation = (90 - (segment_start + segment_extent / 2)) % 360
         rotation_delta = (desired_rotation - start_rotation % 360) % 360 + 360 * random.randint(5, 7)
-        total_frames = 333
+        total_frames = 95 if self.fast_spin_var.get() else 333
         self.spin_frame = 0
         self._draw_wheel(wheel_options, start_rotation, weights)
 
@@ -868,6 +1449,7 @@ class CharacterApp:
             self._draw_wheel(wheel_options, desired_rotation, weights)
             self.wheel_selection.configure(text=f'{label}: {selected_text}')
             assign(selected)
+            self._update_creation_summary()
             self.wheel_rotation = desired_rotation
             self.wheel_status.configure(text=f'Выпало: {label} - {selected_text}')
             self.result.configure(state='normal')
@@ -891,6 +1473,7 @@ class CharacterApp:
             if next_steps:
                 self.wheel_steps[self.spin_index + 1:self.spin_index + 1] = next_steps
             self.spin_index += 1
+            self._update_creation_progress()
             self.spin_after_id = self.root.after(700, self._spin_next)
 
         self.current_spin_finish = finish_spin
@@ -914,8 +1497,16 @@ class CharacterApp:
 
     def _skip_current_spin(self):
         finish_spin = getattr(self, 'current_spin_finish', None)
-        if finish_spin is not None:
-            finish_spin()
+        if finish_spin is None:
+            return
+        finish_spin()
+
+    @staticmethod
+    def _name_characters_allowed(value):
+        return all(
+            char in ' -' or unicodedata.name(char, '').startswith(('LATIN ', 'CYRILLIC '))
+            for char in value
+        )
 
     def generate(self):
         if getattr(self, 'generation_active', False):
@@ -923,6 +1514,14 @@ class CharacterApp:
         name = self.name_var.get().strip()
         if not name:
             messagebox.showwarning('Нужно имя', 'Введите имя персонажа.')
+            self.name_entry.focus_set()
+            return
+        has_letter = any(unicodedata.name(char, '').startswith(('LATIN ', 'CYRILLIC ')) for char in name)
+        if not self._name_characters_allowed(name) or not has_letter:
+            messagebox.showwarning(
+                'Некорректное имя',
+                'Разрешены латинские и кириллические буквы, пробелы и дефисы; добавьте хотя бы одну букву.',
+            )
             self.name_entry.focus_set()
             return
         try:
@@ -936,63 +1535,199 @@ class CharacterApp:
         self.wheel_steps = self._make_wheel_steps(self.current_hero)
         self.spin_index = 0
         self.wheel_rotation = 0
+        self._update_creation_summary()
+        self._update_creation_progress()
         self.generate_button.configure(state='disabled')
         self.set_text(self.result, '')
         self._spin_next()
 
     def show_characters(self):
         self.clear()
-        frame = ttk.Frame(self.root, padding=18)
+        page_scale = self._automatic_page_scale(960, 760)
+        self._set_page_geometry(f'{int(960 * page_scale)}x{int(760 * page_scale)}')
+        frame = ttk.Frame(self.root, padding=20)
         frame.pack(fill='both', expand=True)
-        ttk.Button(frame, text='← На главную', command=self.show_home).pack(anchor='w', pady=(0, 12))
-        self.heading(frame, 'Готовые персонажи')
+        ttk.Button(frame, text='← На главную', command=self.show_home).pack(anchor='w', pady=(0, 10))
+        self.heading(frame, 'Коллекция героев')
         body = ttk.Frame(frame)
         body.pack(fill='both', expand=True)
-        input_background = '#30363d' if self.dark_theme else '#ffffff'
-        foreground = '#f1f3f5' if self.dark_theme else '#202124'
-        selection_background = '#3979a8' if self.dark_theme else '#d9eaf7'
-        self.character_list = tk.Listbox(
-            body, width=24, exportselection=False,
-            background=input_background, foreground=foreground,
-            selectbackground=selection_background, selectforeground=foreground,
-        )
-        self.character_list.pack(side='left', fill='y')
-        self.character_list.bind('<<ListboxSelect>>', self.open_selected)
-        scrollbar = ttk.Scrollbar(body, orient='vertical', command=self.character_list.yview)
-        scrollbar.pack(side='left', fill='y')
-        self.character_list.configure(yscrollcommand=scrollbar.set)
-        preview = ttk.Frame(body)
-        preview.pack(side='left', fill='both', expand=True, padx=(12, 0))
+        gallery = ttk.LabelFrame(body, text='Ваши персонажи', padding=8)
+        gallery.pack(side='left', fill='both', expand=True)
+        controls = ttk.Frame(gallery)
+        controls.pack(fill='x', pady=(0, 7))
+        self.character_search_var = tk.StringVar()
+        search = ttk.Entry(controls, textvariable=self.character_search_var)
+        search.pack(fill='x', pady=(0, 5))
+        search.insert(0, '')
+        self.character_sort_var = tk.StringVar(value='Сначала новые')
+        sort_box = ttk.Combobox(controls, state='readonly', textvariable=self.character_sort_var,
+                                values=('Сначала новые', 'По имени'), width=22)
+        sort_box.pack(fill='x', pady=(0, 5))
+        races = ['Все расы'] + [self._readable_creation_value(race) for race in data.race_sum]
+        self.character_race_var = tk.StringVar(value=races[0])
+        race_box = ttk.Combobox(controls, state='readonly', textvariable=self.character_race_var,
+                                values=races)
+        race_box.pack(fill='x')
+        self.gallery_count = ttk.Label(controls, text='', style='Muted.TLabel')
+        self.gallery_count.pack(anchor='w', pady=(6, 0))
+
+        gallery_area = ttk.Frame(gallery)
+        gallery_area.pack(fill='both', expand=True)
+        colors = self.ui_colors
+        self.gallery_canvas = tk.Canvas(gallery_area, highlightthickness=0,
+                                        background=colors['surface'])
+        gallery_scroll = ttk.Scrollbar(gallery_area, orient='vertical', command=self.gallery_canvas.yview)
+        self.gallery_canvas.configure(yscrollcommand=gallery_scroll.set)
+        self.gallery_canvas.pack(side='left', fill='both', expand=True)
+        gallery_scroll.pack(side='right', fill='y')
+        self.gallery_grid = ttk.Frame(self.gallery_canvas)
+        self.gallery_window = self.gallery_canvas.create_window((0, 0), window=self.gallery_grid, anchor='nw')
+        self.gallery_grid.bind('<Configure>', lambda _event: self.gallery_canvas.configure(
+            scrollregion=self.gallery_canvas.bbox('all')))
+        for widget in (self.gallery_canvas, self.gallery_grid, gallery_area):
+            widget.bind('<MouseWheel>', self._scroll_character_gallery)
+            widget.bind('<Button-4>', self._scroll_character_gallery)
+            widget.bind('<Button-5>', self._scroll_character_gallery)
+        self.gallery_canvas.bind('<Configure>', lambda event: self.gallery_canvas.itemconfigure(
+            self.gallery_window, width=event.width))
+
+        preview = ttk.LabelFrame(body, text='Предпросмотр', padding=10)
+        preview.pack(side='right', fill='y', padx=(14, 0))
         self.card_canvas = tk.Canvas(preview, width=280, height=420,
-                                     highlightthickness=0, background='white')
-        self.card_canvas.pack(pady=(0, 4))
-        self.detail = tk.Text(preview, wrap='word', state='disabled',
-                              font=('Segoe UI', 8), height=5)
-        detail_scroll = ttk.Scrollbar(preview, orient='vertical', command=self.detail.yview)
+                                     highlightthickness=0, background=colors['surface'])
+        self.card_canvas.pack(pady=(0, 6))
+        detail_frame = ttk.Frame(preview)
+        detail_frame.pack(fill='both', expand=True)
+        self.detail = tk.Text(detail_frame, wrap='word', state='disabled',
+                              font=('Segoe UI', 9), height=5, relief='flat', padx=8, pady=6)
+        detail_scroll = ttk.Scrollbar(detail_frame, orient='vertical', command=self.detail.yview)
         self.detail.configure(yscrollcommand=detail_scroll.set)
         self.detail.pack(side='left', fill='both', expand=True)
         detail_scroll.pack(side='right', fill='y')
+
         self.card_template_cache = {}
         self.card_character_sources = {}
         self.card_character_cache = {}
         self.card_weapon_sources = {}
         self.card_weapon_cache = {}
         self.files = character_files_by_creation_date()
+        self.visible_files = []
+        self.selected_character_path = None
+        self.character_search_var.trace_add('write', lambda *_args: self._refresh_character_gallery())
+        sort_box.bind('<<ComboboxSelected>>', lambda _event: self._refresh_character_gallery())
+        race_box.bind('<<ComboboxSelected>>', lambda _event: self._refresh_character_gallery())
+        self._refresh_character_gallery(select_first=True)
+
+    def _read_character_properties(self, path):
+        try:
+            lines = path.read_text(encoding='utf-8').splitlines()
+        except OSError:
+            return {}
+        properties = {}
+        for line in lines:
+            key, separator, value = line.partition(':')
+            if separator:
+                properties[key.strip()] = value.strip()
+        return properties
+
+    def _refresh_character_gallery(self, select_first=False):
+        if not hasattr(self, 'gallery_grid') or not self.gallery_grid.winfo_exists():
+            return
+        for child in self.gallery_grid.winfo_children():
+            child.destroy()
+        query = self.character_search_var.get().strip().casefold()
+        selected_race = self.character_race_var.get()
+        all_races = 'Все расы'
+        filtered = []
         for path in self.files:
-            self.character_list.insert('end', path.stem)
-        if not self.files:
-            self.set_text(self.detail, 'Пока нет сохранённых персонажей.')
+            props = self._read_character_properties(path)
+            race = self._readable_creation_value(props.get('race', ''))
+            haystack = ' '.join((path.stem, *(self._readable_creation_value(value) for value in props.values()))).casefold()
+            if query and query not in haystack:
+                continue
+            if selected_race != all_races and race.casefold() != selected_race.casefold():
+                continue
+            filtered.append(path)
+        if self.character_sort_var.get() == 'По имени':
+            filtered.sort(key=lambda path: path.stem.casefold())
+        self.visible_files = filtered
+        self.gallery_count.configure(text=f'{len(filtered)} / {len(self.files)}')
+        self.gallery_tiles = {}
+        for index, path in enumerate(filtered):
+            props = self._read_character_properties(path)
+            race = self._readable_creation_value(' '.join(filter(None, (props.get('subrace', ''), props.get('race', '')))))
+            size = self._readable_creation_value(props.get('size', ''))
+            tile = tk.Frame(self.gallery_grid, bg=self.ui_colors['input'], highlightthickness=1,
+                            highlightbackground=self.ui_colors['border'], padx=8, pady=8, cursor='hand2')
+            tile.configure(takefocus=True)
+            tile.grid(row=index // 2, column=index % 2, sticky='nsew', padx=4, pady=4)
+            self.gallery_grid.columnconfigure(index % 2, weight=1)
+            tk.Frame(tile, bg=self.ui_colors['accent'], height=3).pack(fill='x', pady=(0, 6))
+            tk.Label(tile, text=path.stem, bg=self.ui_colors['input'], fg=self.ui_colors['foreground'],
+                     font=('Segoe UI', 9, 'bold'), anchor='w', wraplength=135, justify='left').pack(fill='x')
+            tk.Label(tile, text='\n'.join(value for value in (race, size) if value),
+                     bg=self.ui_colors['input'], fg=self.ui_colors['muted'],
+                     font=('Segoe UI', 8), anchor='w', wraplength=135, justify='left').pack(fill='x', pady=(4, 0))
+            self.gallery_tiles[path] = tile
+            for widget in (tile, *tile.winfo_children()):
+                widget.bind('<Button-1>', lambda _event, selected=path: self._select_character(selected))
+                widget.bind('<Return>', lambda _event, selected=path: self._select_character(selected))
+                widget.bind('<space>', lambda _event, selected=path: self._select_character(selected))
+                widget.bind('<MouseWheel>', self._scroll_character_gallery)
+                widget.bind('<Button-4>', self._scroll_character_gallery)
+                widget.bind('<Button-5>', self._scroll_character_gallery)
+            tile.bind('<FocusIn>', lambda _event, card=tile: card.configure(
+                highlightbackground=self.ui_colors['accent'], highlightthickness=3))
+            tile.bind('<FocusOut>', lambda _event, card=tile, selected=path: card.configure(
+                highlightbackground=self.ui_colors['accent'] if selected == self.selected_character_path
+                else self.ui_colors['border'], highlightthickness=1))
+        if not filtered:
+            ttk.Label(self.gallery_grid, text='Никого не нашлось',
+                      style='Muted.TLabel').grid(row=0, column=0, columnspan=2, padx=10, pady=20)
+            self.selected_character_path = None
             self._draw_character_card({})
+            self.set_text(self.detail, '')
+            return
+        if select_first or self.selected_character_path not in filtered:
+            self._select_character(filtered[0])
         else:
-            self.character_list.selection_set(0)
-            self.open_selected()
+            self._select_character(self.selected_character_path)
+
+    def _select_character(self, path):
+        self.selected_character_path = path
+        for tile_path, tile in self.gallery_tiles.items():
+            selected = tile_path == path
+            tile.configure(highlightbackground=self.ui_colors['accent'] if selected else self.ui_colors['border'],
+                           highlightthickness=1)
+        self.open_selected()
+
+    def _scroll_character_gallery(self, event):
+        if event.num == 4:
+            direction = -1
+        elif event.num == 5:
+            direction = 1
+        else:
+            direction = -1 if event.delta > 0 else 1
+        self.gallery_canvas.yview_scroll(direction * 3, 'units')
+        return 'break'
 
     def _draw_character_card(self, properties):
         canvas = self.card_canvas
         canvas.delete('all')
         race = properties.get('race', '').casefold()
         race_template_names = dict(zip((race.casefold() for race in data.race_sum), ('human', 'orc', 'elf')))
+        for race_value, template in zip(data.race_sum, ('human', 'orc', 'elf')):
+            try:
+                race_template_names[race_value.encode('utf-8').decode('cp1251').casefold()] = template
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
         template_name = race_template_names.get(race)
+        if template_name is None:
+            try:
+                repaired_race = race.encode('cp1251').decode('utf-8').casefold()
+                template_name = race_template_names.get(repaired_race)
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
         template_path = (
             Path(__file__).resolve().parent / 'CardTemplates' / 'races' / f'{template_name}.png'
             if template_name else None
@@ -1016,8 +1751,19 @@ class CharacterApp:
                                     fill='#263448', outline='#d3aa56', width=3)
 
         size_name = properties.get('size', '').casefold()
-        target_heights = dict(zip((size.casefold() for size in data.size_sum), (190, 225, 265, 305)))
-        target_height = target_heights.get(size_name, 225)
+        target_heights = dict(zip((size.casefold() for size in data.size_sum), (160, 185, 210, 235)))
+        for size, height in zip(data.size_sum, (160, 185, 210, 235)):
+            try:
+                target_heights[size.encode('utf-8').decode('cp1251').casefold()] = height
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+        target_height = target_heights.get(size_name, 185)
+        if size_name not in target_heights:
+            try:
+                repaired_size = size_name.encode('cp1251').decode('utf-8').casefold()
+                target_height = target_heights.get(repaired_size, target_height)
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
         figure_key = (template_name, target_height)
         figure = self.card_character_cache.get(figure_key)
         figure_path = (
@@ -1030,22 +1776,30 @@ class CharacterApp:
                 if source is None:
                     source = tk.PhotoImage(file=str(figure_path))
                     self.card_character_sources[template_name] = source
-                scale = max(1, round(source.height() / target_height))
+                scale = max(1, math.ceil(source.height() / target_height))
                 figure = source.subsample(scale, scale)
                 self.card_character_cache[figure_key] = figure
             except tk.TclError:
                 figure = None
 
         figure_x = left + 130
-        figure_bottom = top + 330
+        figure_bottom = top + 300
         ability = properties.get('ability', '—')
 
         if figure is not None:
             hand_fractions = {'human': 0.17, 'orc': 0.12, 'elf': 0.17}
             hand_x = figure_x - figure.width() / 2 + figure.width() * hand_fractions.get(template_name, 0.16)
             hand_y = figure_bottom - figure.height() * 0.62
-            self._draw_card_weapon(canvas, properties.get('weapon', ''), hand_x, hand_y)
+            self._draw_card_weapon(
+                canvas, properties.get('weapon', ''), hand_x, hand_y,
+                size_factor=target_height / 185,
+            )
             canvas.create_image(figure_x, figure_bottom, image=figure, anchor='s')
+
+        canvas.create_rectangle(left + 3, top + 4, left + 257, top + 60,
+                                fill='#17212b', outline='')
+        canvas.create_rectangle(left + 3, top + 306, left + 257, top + 387,
+                                fill='#17212b', outline='')
 
         def label(y, text, size=9, bold=False, width=224):
             options = dict(text=text, width=width, justify='center',
@@ -1063,14 +1817,23 @@ class CharacterApp:
         if ability_power and ability_power != 'None':
             ability = f'{ability} · {ability_power}'
         label(376, f'Сила: {textwrap.shorten(ability, 30)}', 8)
+        accent = '#d3aa56' if self.dark_theme else '#b4822e'
+        canvas.create_line(left + 20, top + 60, left + 240, top + 60,
+                           fill=accent, width=2)
+        canvas.create_line(left + 20, top + 306, left + 240, top + 306,
+                           fill=accent, width=1)
+        canvas.create_rectangle(left, top, left + 260, top + 390,
+                                outline=accent, width=2)
 
-    def _draw_card_weapon(self, canvas, weapon, hand_x, hand_y):
+    def _draw_card_weapon(self, canvas, weapon, hand_x, hand_y, size_factor=1.0):
         weapon = weapon.casefold()
-        weapon_templates = {
-            '\u043a\u0430\u0442\u0430\u043d\u0430': 'katana', '\u0442\u043e\u043f\u043e\u0440': 'axe', '\u043c\u0435\u0447': 'sword',
-            '\u043f\u0438\u0441\u0442\u043e\u043b\u0435\u0442': 'pistol', '\u0442\u0430\u043d\u043a': 'tank',
-            '\u043f\u043e\u0440\u0442\u0430\u043b\u044c\u043d\u0430\u044f \u043f\u0443\u0448\u043a\u0430': 'portal_cannon',
-        }
+        weapon_files = ('katana', 'axe', 'sword', 'pistol', 'tank', 'portal_cannon')
+        weapon_templates = dict(zip((name.casefold() for name in data.weapon_sum[1:]), weapon_files))
+        for name, filename in zip(data.weapon_sum[1:], weapon_files):
+            try:
+                weapon_templates[name.encode('utf-8').decode('cp1251').casefold()] = filename
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
         template_name = weapon_templates.get(weapon)
         if template_name:
             source = self.card_weapon_sources.get(template_name)
@@ -1082,8 +1845,9 @@ class CharacterApp:
                 except tk.TclError:
                     source = None
             if source is not None:
-                scale = max(1, math.ceil(max(source.width() / 88, source.height() / 88)))
-                cache_key = (template_name, scale)
+                target_size = max(20, round(48 * size_factor))
+                scale = max(1, math.ceil(max(source.width() / target_size, source.height() / target_size)))
+                cache_key = (template_name, target_size, scale)
                 image = self.card_weapon_cache.get(cache_key)
                 if image is None:
                     image = source.subsample(scale, scale)
@@ -1091,7 +1855,13 @@ class CharacterApp:
                 if template_name == 'tank':
                     x, y = hand_x - image.width() * 0.58, hand_y - image.height() * 0.62
                 else:
-                    x, y = hand_x - image.width() * 0.78, hand_y - image.height() * 0.78
+                    grip_anchors = {
+                        'katana': (0.90, 0.91), 'axe': (0.92, 0.93),
+                        'sword': (0.90, 0.91), 'pistol': (0.83, 0.76),
+                        'portal_cannon': (0.90, 0.90),
+                    }
+                    grip_x, grip_y = grip_anchors.get(template_name, (0.9, 0.9))
+                    x, y = hand_x - image.width() * grip_x, hand_y - image.height() * grip_y
                 canvas.create_image(x, y, image=image, anchor='nw')
                 return
         if weapon in ('', 'none', 'без оружия'):
@@ -1155,22 +1925,16 @@ class CharacterApp:
         widget.configure(state='disabled')
 
     def open_selected(self, _event=None):
-        selection = self.character_list.curselection()
-        if not selection:
+        path = getattr(self, 'selected_character_path', None)
+        if path is None:
             return
-        path = self.files[selection[0]]
         try:
             content = path.read_text(encoding='utf-8')
         except OSError as error:
             messagebox.showerror('Ошибка чтения', str(error))
             return
         self.set_text(self.detail, content)
-        properties = {}
-        for line in content.splitlines():
-            key, separator, value = line.partition(':')
-            if separator:
-                properties[key.strip()] = value.strip()
-        self._draw_character_card(properties)
+        self._draw_character_card(self._read_character_properties(path))
 
 
 def run():

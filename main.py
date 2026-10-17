@@ -29,7 +29,6 @@ class character():
 
         self.title = None
 
-        self.image = None
 
 def substory_giver(character):
     character.substory = random.choices(data.substory_sum, weights=data.substory_weights, k=1)[0]
