@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 from contextlib import redirect_stdout
 from io import StringIO
 import json
@@ -7,7 +7,7 @@ import random
 import textwrap
 import unicodedata
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox, ttk, font as tkfont
 
 import main
 import data
@@ -282,7 +282,7 @@ class CharacterApp:
         menu.pack(fill='both', expand=True)
         entries = (
             ('Генератор героев', 'Создай нового персонажа', self.show_create),
-            ('Коллекция', 'Просматривай и узнавай героев', self.show_characters),
+            ('Коллекция', 'Просматривай и прокачивай героев', self.show_characters),
             ('Арена', 'Сравни двух бойцов в сражении', self.show_fight),
             ('Турнир', 'Собери ростер и проведи чемпионат', self.show_tournament),
             ('Опции', 'Тема и параметры окна', self.show_options),
@@ -857,10 +857,6 @@ class CharacterApp:
         self.fight_history.tag_configure('second-wins', foreground='#c34747' if not self.dark_theme else '#ffaaaa')
         self._draw_fight_portrait(0)
         self._draw_fight_portrait(1)
-        self.fight_result = self.make_text(frame)
-        self.fight_result.pack_forget()
-        self.fight_result.configure(height=4)
-        self.fight_result.pack(fill='x', expand=False, pady=(4, 0))
 
     def _on_fight_selection_changed(self, fighter_index):
         for panel, outcome, stats_card, portrait in zip(
@@ -879,6 +875,8 @@ class CharacterApp:
         self._draw_fight_wheel(*self.fight_names, getattr(self, 'fight_rotation', 0))
 
     def _draw_fight_portrait(self, fighter_index):
+        if fighter_index not in (0, 1):
+            return
         selector = self.first_fighter if fighter_index == 0 else self.second_fighter
         canvas = self.fight_portrait_canvases[fighter_index]
         canvas.delete('all')
@@ -1046,7 +1044,6 @@ class CharacterApp:
         self.fight_button.configure(state='disabled')
         self.first_fighter.configure(state='disabled')
         self.second_fighter.configure(state='disabled')
-        self.set_text(self.fight_result, '')
         self.fight_rounds = result['comparisons']
         self.fight_report = result['report']
         self.fight_winner_index = 0 if result['winner'] == result['first_name'] else 1
@@ -1101,8 +1098,8 @@ class CharacterApp:
 
     def _spin_fight_round(self):
         if self.fight_round_index >= len(self.fight_rounds):
-            self._draw_fight_portrait(self.first_fighter.current())
-            self._draw_fight_portrait(self.second_fighter.current())
+            self._draw_fight_portrait(0)
+            self._draw_fight_portrait(1)
             last_comparison = self.fight_rounds[-1]
             self._draw_fight_wheel(
                 *self.fight_names,
@@ -1111,7 +1108,6 @@ class CharacterApp:
                 last_comparison['second_points'],
             )
             self.fight_status.configure(text='Сражение завершено')
-            self.set_text(self.fight_result, self.fight_report)
             winner = self.fight_winner
             winner_index = self.fight_winner_index
             win_bg = '#d9f2df' if not self.dark_theme else '#214a36'
@@ -1152,6 +1148,9 @@ class CharacterApp:
             self.fight_button.configure(state='normal')
             self.first_fighter.configure(state='readonly')
             self.second_fighter.configure(state='readonly')
+            self.first_fighter.selection_clear()
+            self.second_fighter.selection_clear()
+            self.fight_button.focus_set()
             return
 
         comparison = self.fight_rounds[self.fight_round_index]
@@ -1256,34 +1255,41 @@ class CharacterApp:
         self.skip_spin_button.pack(pady=(5, 0))
         summary = ttk.LabelFrame(content, text='Карточка героя', padding=10)
         summary.pack(side='right', fill='y', padx=(0, 2))
-        summary.configure(width=220)
+        summary.configure(width=250)
         summary.pack_propagate(False)
         self.create_summary_rows = {}
-        self.create_summary_name = ttk.Label(summary, text='Новый герой',
-                                              style='CreationSummary.Value.TLabel',
-                                              font=('Segoe UI', 12, 'bold'), wraplength=180)
-        self.create_summary_name.pack(anchor='w', pady=(0, 5))
+        name_card = tk.Frame(summary, background=self.ui_colors['surface'], padx=8, pady=6,
+                             highlightthickness=1, highlightbackground=self.ui_colors['border'])
+        name_card.pack(fill='x', pady=(0, 5))
+        self.create_summary_name = tk.Label(
+            name_card, text='\u041d\u043e\u0432\u044b\u0439 \u0433\u0435\u0440\u043e\u0439',
+            bg=self.ui_colors['surface'], fg=self.ui_colors['foreground'],
+            font=('Segoe UI', 12, 'bold'), wraplength=210, anchor='w', justify='left',
+        )
+        self.create_summary_name.pack(fill='x')
         for label, key in (
-            ('Происхождение', 'substory'),
-            ('Раса', 'race_line'), ('Рост', 'size'),
-            ('Сила', 'strength'), ('Скорость', 'speed'),
-            ('Ум', 'iq'), ('Боевые навыки', 'fighting'),
-            ('Оружие', 'weapon'), ('Владение', 'weapon_mastery'),
-            ('Зачарование', 'weapon_enchantment'),
-            ('Способность', 'ability'),
-            ('Мощь', 'ability_power'), ('Хаос', 'chaos'),
-            ('Титул', 'title'),
+            ('\u041f\u0440\u043e\u0438\u0441\u0445\u043e\u0436\u0434\u0435\u043d\u0438\u0435', 'substory'),
+            ('\u0420\u0430\u0441\u0430', 'race_line'), ('\u0420\u043e\u0441\u0442', 'size'),
+            ('\u0421\u0438\u043b\u0430', 'strength'), ('\u0421\u043a\u043e\u0440\u043e\u0441\u0442\u044c', 'speed'),
+            ('\u0423\u043c', 'iq'), ('\u0411\u043e\u0435\u0432\u044b\u0435 \u043d\u0430\u0432\u044b\u043a\u0438', 'fighting'),
+            ('\u041e\u0440\u0443\u0436\u0438\u0435', 'weapon'), ('\u0412\u043b\u0430\u0434\u0435\u043d\u0438\u0435', 'weapon_mastery'),
+            ('\u0417\u0430\u0447\u0430\u0440\u043e\u0432\u0430\u043d\u0438\u0435', 'weapon_enchantment'),
+            ('\u0421\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u044c', 'ability'),
+            ('\u041c\u043e\u0449\u044c', 'ability_power'), ('\u0425\u0430\u043e\u0441', 'chaos'),
+            ('\u0422\u0438\u0442\u0443\u043b', 'title'),
         ):
-            row = ttk.Frame(summary, style='CreationSummary.TFrame')
-            row.pack(fill='x', pady=1)
-            ttk.Label(row, text=label, style='CreationSummary.Muted.TLabel',
-                      font=('Segoe UI', 8)).pack(anchor='w')
-            value_label = ttk.Label(row, text='\u2014', style='CreationSummary.Value.TLabel',
-                                    wraplength=180, justify='left', anchor='nw',
-                                    font=('Segoe UI', 9, 'bold'))
-            value_label.pack(anchor='w', pady=(0, 1))
+            row = tk.Frame(summary, background=self.ui_colors['surface'], padx=7, pady=4,
+                           highlightthickness=1, highlightbackground=self.ui_colors['border'])
+            row.pack(fill='x', pady=2)
+            row.grid_columnconfigure(1, weight=1)
+            tk.Label(row, text=label, anchor='w', background=self.ui_colors['surface'],
+                     foreground=self.ui_colors['muted'], font=('Segoe UI', 9, 'bold')).grid(
+                         row=0, column=0, sticky='w', padx=(0, 6))
+            value_label = tk.Label(row, text='\u2014', anchor='e', justify='right',
+                                   background=self.ui_colors['surface'], foreground=self.ui_colors['foreground'],
+                                   font=('Segoe UI', 9, 'bold'), wraplength=125)
+            value_label.grid(row=0, column=1, sticky='e')
             self.create_summary_rows[key] = value_label
-
         self.name_entry.focus_set()
 
     @staticmethod
@@ -1614,15 +1620,17 @@ class CharacterApp:
         self.card_canvas.pack(pady=(0, 6))
         detail_frame = ttk.Frame(preview)
         detail_frame.pack(fill='both', expand=True)
-        self.detail = tk.Text(detail_frame, wrap='word', state='disabled',
-                              font=('Segoe UI', 10), height=9, relief='flat', padx=8, pady=6,
-                              background=colors['input'], foreground=colors['foreground'],
-                              insertbackground=colors['foreground'])
+        self.detail = tk.Canvas(detail_frame, width=300, highlightthickness=0,
+                                background=colors['input'])
         detail_scroll = ttk.Scrollbar(detail_frame, orient='vertical', command=self.detail.yview)
         self.detail.configure(yscrollcommand=detail_scroll.set)
         self.detail.pack(side='left', fill='both', expand=True)
         detail_scroll.pack(side='right', fill='y')
-
+        self.stat_upgrade_fields = {'strength', 'speed', 'iq', 'fighting', 'weapon_mastery', 'ability_power'}
+        for widget in (detail_frame, self.detail):
+            widget.bind('<MouseWheel>', self._scroll_character_preview)
+            widget.bind('<Button-4>', self._scroll_character_preview)
+            widget.bind('<Button-5>', self._scroll_character_preview)
         self.card_template_cache = {}
         self.card_character_sources = {}
         self.card_character_cache = {}
@@ -1738,7 +1746,7 @@ class CharacterApp:
         if not filtered:
             self.selected_character_path = None
             self._draw_character_card({})
-            self.set_text(self.detail, '')
+            self._clear_preview_rows()
             return
         if select_first or self.selected_character_path not in filtered:
             self._select_character(filtered[0])
@@ -1746,6 +1754,7 @@ class CharacterApp:
             self._select_character(self.selected_character_path)
 
     def _select_character(self, path):
+        same_selection = path == self.selected_character_path
         self.selected_character_path = path
         for tile_path, background_id in self.gallery_tiles.items():
             selected = tile_path == path
@@ -1754,7 +1763,49 @@ class CharacterApp:
                 outline=self.ui_colors['accent'] if selected else self.ui_colors['border'],
                 width=2 if selected else 1,
             )
+        if not same_selection:
+            self.open_selected()
+
+    def _upgrade_character_stat(self, stat):
+        path = getattr(self, 'selected_character_path', None)
+        pools = {
+            'strength': (data.strength_sum, data.strength_weights),
+            'speed': (data.speed_sum, data.speed_weights),
+            'iq': (data.iq_sum, data.iq_weights),
+            'fighting': (data.fighting_sum, data.fighting_weights),
+            'weapon_mastery': (data.weapon_mastery_sum, data.weapon_mastery_weights),
+            'ability_power': (data.ability_power_sum, data.ability_power_weights),
+        }
+        if path is None or stat not in pools:
+            return
+        properties = self._read_character_properties(path)
+        options, weights = pools[stat]
+        try:
+            next_index = options.index(properties.get(stat, '')) - 1
+            points = int(properties.get('points', '0'))
+        except (ValueError, TypeError):
+            return
+        if next_index < 0:
+            return
+        cost = weights[next_index] * 4
+        if points < cost:
+            return
+
+        lines = path.read_text(encoding='utf-8').splitlines()
+        updates = {stat: options[next_index], 'points': str(points - cost)}
+        found = set()
+        for index, line in enumerate(lines):
+            key, separator, _value = line.partition(':')
+            key = key.strip()
+            if separator and key in updates:
+                lines[index] = f'{key}: {updates[key]}'
+                found.add(key)
+        for key, value in updates.items():
+            if key not in found:
+                lines.append(f'{key}: {value}')
+        path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
         self.open_selected()
+        self._refresh_character_gallery()
 
     def _scroll_character_gallery(self, event):
         event_number = getattr(event, 'num', None)
@@ -2061,6 +2112,21 @@ class CharacterApp:
         text.pack(fill='both', expand=True, pady=(8, 0))
         return text
 
+    def _scroll_character_preview(self, event):
+        event_number = getattr(event, 'num', None)
+        if event_number == 4:
+            direction = -1
+        elif event_number == 5:
+            direction = 1
+        else:
+            delta = getattr(event, 'delta', 0)
+            direction = -1 if delta > 0 else 1
+        self.detail.yview_scroll(direction * 3, 'units')
+        return 'break'
+
+    def _clear_preview_rows(self):
+        self.detail.delete('all')
+        self.detail.configure(scrollregion=(0, 0, max(1, self.detail.winfo_width()), 0))
     def set_text(self, widget, value):
         widget.configure(state='normal')
         widget.delete('1.0', 'end')
@@ -2072,10 +2138,26 @@ class CharacterApp:
         if path is None:
             return
         properties = self._read_character_properties(path)
-        self.detail.configure(state='normal')
-        self.detail.delete('1.0', 'end')
-        self.detail.tag_configure('field', foreground=self.ui_colors['muted'], font=('Segoe UI', 9, 'bold'))
-        self.detail.tag_configure('value', foreground=self.ui_colors['foreground'], font=('Segoe UI', 11))
+        pools = {
+            'strength': (data.strength_sum, data.strength_weights),
+            'speed': (data.speed_sum, data.speed_weights),
+            'iq': (data.iq_sum, data.iq_weights),
+            'fighting': (data.fighting_sum, data.fighting_weights),
+            'weapon_mastery': (data.weapon_mastery_sum, data.weapon_mastery_weights),
+            'ability_power': (data.ability_power_sum, data.ability_power_weights),
+        }
+        try:
+            points = int(properties.get('points', '0'))
+        except ValueError:
+            points = 0
+        upgrade_costs = {}
+        for stat, (options, weights) in pools.items():
+            try:
+                next_index = options.index(properties.get(stat, '')) - 1
+            except ValueError:
+                next_index = -1
+            upgrade_costs[stat] = weights[next_index] * 4 if next_index >= 0 else None
+        self._clear_preview_rows()
         fields = (
             ('\u0418\u043c\u044f', 'name'), ('\u041e\u0447\u043a\u0438', 'points'),
             ('\u041f\u0440\u043e\u0438\u0441\u0445\u043e\u0436\u0434\u0435\u043d\u0438\u0435', 'substory'),
@@ -2088,14 +2170,66 @@ class CharacterApp:
             ('\u0421\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u044c', 'ability'), ('\u041c\u043e\u0449\u044c \u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u0438', 'ability_power'),
             ('\u0425\u0430\u043e\u0441', 'chaos'), ('\u0422\u0438\u0442\u0443\u043b', 'title'),
         )
+        canvas_width = max(300, self.detail.winfo_width())
+        left, right, gap = 6, canvas_width - 6, 6
+        label_font = tkfont.Font(family='Segoe UI', size=11, weight='bold')
+        y = 6
         for label, key in fields:
             raw_value = properties.get(key, '').strip()
             if not raw_value or raw_value.casefold() == 'none':
                 continue
             value = self._readable_creation_value(raw_value)
-            self.detail.insert('end', f'{label}\n', 'field')
-            self.detail.insert('end', f'{value}\n\n', 'value')
-        self.detail.configure(state='disabled')
+            action_width = 62 if key in self.stat_upgrade_fields else 0
+            label_width = min(165, max(108, label_font.measure(label) + 10))
+            value_width = max(50, right - left - label_width - action_width - gap * 3)
+            value_chars = max(8, value_width // 8)
+            value_lines = max(1, (len(value) + value_chars - 1) // value_chars)
+            row_height = max(44, value_lines * 18 + 16)
+            bottom = y + row_height
+            self.detail.create_rectangle(
+                left, y, right, bottom, fill=self.ui_colors['surface'],
+                outline=self.ui_colors['border'], width=1,
+            )
+            self.detail.create_text(
+                left + 8, y + row_height / 2, text=label, anchor='w',
+                fill=self.ui_colors['muted'], font=label_font,
+            )
+            value_right = right - action_width - gap - 6
+            self.detail.create_text(
+                value_right, y + row_height / 2, text=value, anchor='e',
+                width=value_width, fill=self.ui_colors['foreground'], font=('Segoe UI', 12),
+            )
+            if key in self.stat_upgrade_fields:
+                cost = upgrade_costs.get(key)
+                can_upgrade = cost is not None and points >= cost
+                if key == 'weapon_mastery' and properties.get('weapon', '') == data.weapon_sum[0]:
+                    can_upgrade = False
+                if key == 'ability_power' and properties.get('ability', '') == data.ability_sum[0]:
+                    can_upgrade = False
+                action_text = 'MAX' if cost is None else chr(8593) + f' {cost}'
+                action_left = right - action_width - 4
+                action_right = right - 4
+                action_tag = f'upgrade_{key}'
+                action_fill = '#f2c94c' if can_upgrade else self.ui_colors['input']
+                action_text_fill = '#493700' if can_upgrade else self.ui_colors['muted']
+                self.detail.create_rectangle(
+                    action_left, y + 7, action_right, bottom - 7,
+                    fill=action_fill, outline='#d6a300' if can_upgrade else self.ui_colors['border'],
+                    tags=(action_tag,),
+                )
+                self.detail.create_text(
+                    (action_left + action_right) / 2, y + row_height / 2,
+                    text=action_text, fill=action_text_fill,
+                    font=('Segoe UI', 10, 'bold'), tags=(action_tag,),
+                )
+                if can_upgrade:
+                    self.detail.tag_bind(action_tag, '<Button-1>',
+                                         lambda _event, stat=key: self._upgrade_character_stat(stat))
+                    self.detail.tag_bind(action_tag, '<Enter>', lambda _event: self.detail.configure(cursor='hand2'))
+                    self.detail.tag_bind(action_tag, '<Leave>', lambda _event: self.detail.configure(cursor=''))
+            y = bottom + 5
+        self.detail.configure(scrollregion=(0, 0, canvas_width, y))
+        self.detail.yview_moveto(0)
         self._draw_character_card(properties)
 
 
@@ -2107,3 +2241,4 @@ def run():
 
 if __name__ == '__main__':
     run()
+
