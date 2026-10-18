@@ -4,12 +4,14 @@ from io import StringIO
 import json
 import math
 import random
+import re
 import textwrap
 import unicodedata
 import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk, font as tkfont
 
+import audio
 import main
 import data
 import Fight
@@ -19,6 +21,8 @@ import Tournament
 CHARACTERS_DIR = Path(__file__).resolve().parent / 'Characters'
 VILLAINS_DIR = Path(__file__).resolve().parent / 'Villains'
 LADDER_RUNS_DIR = Path(__file__).resolve().parent / 'LadderRuns'
+LORE_PATH = Path(__file__).resolve().parent / 'lore.md'
+ENDING_LORE_PATH = Path(__file__).resolve().parent / 'lore_ending.md'
 LADDER_INDEX_KEY = 'ladder_index'
 
 
@@ -174,8 +178,15 @@ class CharacterApp:
         self.window_resolution = None
         self.fullscreen = False
         self.dark_theme = False
+        self.sound_enabled = True
+        self.sound_volume = 0.7
         self.settings_path = Path(__file__).resolve().parent / 'settings.json'
         self._load_settings()
+        self.audio = audio.AudioManager(
+            enabled=self.sound_enabled, volume=self.sound_volume,
+        )
+        self._bind_button_sounds()
+        root.protocol('WM_DELETE_WINDOW', self.close)
         if self.fullscreen:
             root.attributes('-fullscreen', True)
         elif self.window_resolution:
@@ -185,7 +196,7 @@ class CharacterApp:
         self.style = style
         style.configure('Menu.TButton', font=('Segoe UI', 13, 'bold'), padding=(16, 14))
         self._apply_theme()
-        self.show_home()
+        self.show_intro()
 
     def _load_settings(self):
         try:
@@ -196,6 +207,11 @@ class CharacterApp:
             return
         self.dark_theme = bool(settings.get('dark_theme', False))
         self.fullscreen = bool(settings.get('fullscreen', False))
+        self.sound_enabled = bool(settings.get('sound_enabled', self.sound_enabled))
+        try:
+            self.sound_volume = max(0.0, min(1.0, float(settings.get('sound_volume', self.sound_volume))))
+        except (TypeError, ValueError):
+            pass
         resolution = settings.get('window_resolution')
         if isinstance(resolution, str) and 'x' in resolution:
             try:
@@ -210,6 +226,8 @@ class CharacterApp:
             'dark_theme': self.dark_theme,
             'fullscreen': self.fullscreen,
             'window_resolution': self.window_resolution,
+            'sound_enabled': self.sound_enabled,
+            'sound_volume': self.sound_volume,
         }
         try:
             self.settings_path.write_text(
@@ -217,6 +235,27 @@ class CharacterApp:
             )
         except OSError:
             pass
+
+    def _bind_button_sounds(self):
+        for binding_tag in ('TButton', 'Button', 'TCheckbutton', 'Checkbutton'):
+            self.root.bind_class(
+                binding_tag, '<ButtonPress-1>', self._play_button_sound, add='+',
+            )
+
+    def _play_button_sound(self, _event=None):
+        self.audio.play_effect('button_click')
+
+    def _show_error(self, *args, **kwargs):
+        self.audio.play_effect('error')
+        return messagebox.showerror(*args, **kwargs)
+
+    def _activate_menu_tile(self, command):
+        self.audio.play_effect('button_click')
+        command()
+
+    def close(self):
+        self.audio.close()
+        self.root.destroy()
 
     def clear(self):
         self.generation_active = False
@@ -228,6 +267,14 @@ class CharacterApp:
             except tk.TclError:
                 pass
             self.spin_after_id = None
+        for attribute in ('intro_after_id', 'intro_manual_pause_id'):
+            after_id = getattr(self, attribute, None)
+            if after_id is not None:
+                try:
+                    self.root.after_cancel(after_id)
+                except tk.TclError:
+                    pass
+                setattr(self, attribute, None)
         for child in self.root.winfo_children():
             child.destroy()
         self.root.after_idle(self._apply_theme)
@@ -409,10 +456,298 @@ class CharacterApp:
     def heading(self, parent, text):
         ttk.Label(parent, text=text, font=('Segoe UI', 19, 'bold')).pack(anchor='w', pady=(0, 16))
 
+    def _render_markdown(self, widget, markdown):
+        """Render the common Markdown elements used by the intro lore."""
+        colors = self.ui_colors
+        widget.tag_configure('h1', font=('Segoe UI', 24, 'bold'), foreground=colors['accent'],
+                             spacing1=12, spacing3=14)
+        widget.tag_configure('h2', font=('Segoe UI', 17, 'bold'), foreground=colors['foreground'],
+                             spacing1=10, spacing3=8)
+        widget.tag_configure('h3', font=('Segoe UI', 13, 'bold'), foreground=colors['accent'],
+                             spacing1=8, spacing3=5)
+        widget.tag_configure('paragraph', font=('Segoe UI', 11), spacing1=2, spacing3=10,
+                             lmargin1=2, lmargin2=2)
+        widget.tag_configure('quote', font=('Segoe UI', 11, 'italic'),
+                             foreground=colors['muted'], lmargin1=18, lmargin2=18,
+                             spacing1=4, spacing3=10)
+        widget.tag_configure('list', font=('Segoe UI', 11), lmargin1=18, lmargin2=38,
+                             spacing1=1, spacing3=4)
+        widget.tag_configure('code', font=('Consolas', 10), background=colors['input'],
+                             lmargin1=14, lmargin2=14, spacing1=4, spacing3=8)
+        widget.tag_configure('bold', font=('Segoe UI', 11, 'bold'))
+        widget.tag_configure('italic', font=('Segoe UI', 11, 'italic'))
+        widget.tag_configure('strike', overstrike=True)
+        widget.tag_configure('inline_code', font=('Consolas', 10), background=colors['input'])
+        widget.tag_configure('link', foreground=colors['accent'], underline=True)
+        widget.tag_configure('rule', foreground=colors['muted'], justify='center', spacing1=5, spacing3=12)
+
+        inline_pattern = re.compile(
+            r'(\*\*.+?\*\*|__.+?__|~~.+?~~|`[^`]+`|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))'
+        )
+
+        def add_inline(value, block_tag):
+            cursor = 0
+            for match in inline_pattern.finditer(value):
+                if match.start() > cursor:
+                    widget.insert('end', value[cursor:match.start()], block_tag)
+                token = match.group(0)
+                if token.startswith(('**', '__')):
+                    widget.insert('end', token[2:-2], (block_tag, 'bold'))
+                elif token.startswith('~~'):
+                    widget.insert('end', token[2:-2], (block_tag, 'strike'))
+                elif token.startswith('`'):
+                    widget.insert('end', token[1:-1], (block_tag, 'inline_code'))
+                elif token.startswith(('*', '_')):
+                    widget.insert('end', token[1:-1], (block_tag, 'italic'))
+                else:
+                    link_match = re.fullmatch(r'\[([^\]]+)\]\(([^)]+)\)', token)
+                    if link_match:
+                        widget.insert('end', link_match.group(1), (block_tag, 'link'))
+                cursor = match.end()
+            if cursor < len(value):
+                widget.insert('end', value[cursor:], block_tag)
+
+        lines = markdown.splitlines()
+        paragraph = []
+
+        def flush_paragraph():
+            if paragraph:
+                add_inline(' '.join(part.strip() for part in paragraph), 'paragraph')
+                widget.insert('end', '\n', 'paragraph')
+                paragraph.clear()
+
+        index = 0
+        while index < len(lines):
+            line = lines[index]
+            stripped = line.strip()
+            if not stripped:
+                flush_paragraph()
+                index += 1
+                continue
+
+            heading_match = re.match(r'^(#{1,3})\s+(.+?)\s*#*$', stripped)
+            if heading_match:
+                flush_paragraph()
+                level = len(heading_match.group(1))
+                add_inline(heading_match.group(2), f'h{level}')
+                widget.insert('end', '\n', f'h{level}')
+                index += 1
+                continue
+
+            if re.fullmatch(r'([-*_]\s*){3,}', stripped):
+                flush_paragraph()
+                widget.insert('end', '────────────────────────────────────────\n', 'rule')
+                index += 1
+                continue
+
+            if stripped.startswith('```'):
+                flush_paragraph()
+                index += 1
+                while index < len(lines) and not lines[index].strip().startswith('```'):
+                    widget.insert('end', lines[index] + '\n', 'code')
+                    index += 1
+                index += 1
+                widget.insert('end', '\n')
+                continue
+
+            if stripped.startswith('>'):
+                flush_paragraph()
+                quote_lines = []
+                while index < len(lines) and lines[index].strip().startswith('>'):
+                    quote_lines.append(re.sub(r'^\s*>\s?', '', lines[index]).strip())
+                    index += 1
+                add_inline(' '.join(quote_lines), 'quote')
+                widget.insert('end', '\n', 'quote')
+                continue
+
+            unordered = re.match(r'^\s*[-+*]\s+(.+)$', line)
+            ordered = re.match(r'^\s*\d+[.)]\s+(.+)$', line)
+            if unordered or ordered:
+                flush_paragraph()
+                list_index = 1
+                while index < len(lines):
+                    current = lines[index]
+                    unordered_item = re.match(r'^\s*[-+*]\s+(.+)$', current)
+                    ordered_item = re.match(r'^\s*\d+[.)]\s+(.+)$', current)
+                    item = unordered_item or ordered_item
+                    if not item:
+                        break
+                    prefix = '• ' if unordered_item else f'{list_index}. '
+                    widget.insert('end', prefix, 'list')
+                    add_inline(item.group(1), 'list')
+                    widget.insert('end', '\n', 'list')
+                    list_index += 1
+                    index += 1
+                continue
+
+            paragraph.append(line)
+            index += 1
+
+        flush_paragraph()
+
+    def show_intro(self):
+        self.show_lore_page(
+            LORE_PATH,
+            'Хроники Неудачного забега',
+            'Летопись мира и тех, кому предстоит в нём сразиться.',
+            'Пропустить → меню',
+            self.show_home,
+        )
+
+    def show_ending_lore(self):
+        self.show_lore_page(
+            ENDING_LORE_PATH,
+            'Последняя летопись',
+            'История о том, чем закончился этот забег.',
+            'Завершить → меню',
+            self.show_home,
+        )
+
+    def show_lore_page(self, lore_path, title, subtitle, finish_label, finish_command):
+        self.clear()
+        self.ladder_selection_mode = False
+        self.root.title(f'Неудачный забег — {title.lower()}')
+        self.audio.play_music('lore')
+        page_scale = self._automatic_page_scale(900, 720)
+        self._set_page_geometry(f'{int(900 * page_scale)}x{int(720 * page_scale)}')
+        frame = ttk.Frame(self.root, padding=(30, 22))
+        frame.pack(fill='both', expand=True)
+        ttk.Label(frame, text=title,
+                  font=('Segoe UI', 24, 'bold')).pack(anchor='w')
+        ttk.Label(frame, text=subtitle,
+                  foreground=self.ui_colors['muted'], font=('Segoe UI', 10)).pack(
+                      anchor='w', pady=(2, 14)
+                  )
+
+        text_area = ttk.Frame(frame)
+        text_area.pack(fill='both', expand=True)
+        text = tk.Text(
+            text_area, wrap='word', padx=26, pady=22, relief='flat', borderwidth=0,
+            font=('Segoe UI', 11), spacing1=2, spacing3=8, takefocus=True,
+        )
+        scrollbar = ttk.Scrollbar(
+            text_area, orient='vertical', command=self._intro_scrollbar_command,
+        )
+        text.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side='right', fill='y')
+        text.pack(side='left', fill='both', expand=True)
+        self.intro_text = text
+        try:
+            markdown = lore_path.read_text(encoding='utf-8')
+        except (OSError, UnicodeError) as error:
+            markdown = f'# LORE FILE UNAVAILABLE\n\nCould not read `{lore_path.name}`: {error}'
+        self._render_markdown(text, markdown)
+        text.configure(state='disabled')
+        text.yview_moveto(0)
+
+        controls = ttk.Frame(frame)
+        controls.pack(fill='x', pady=(14, 0))
+        self.intro_pause_button = ttk.Button(
+            controls, text='Пауза', command=self._toggle_intro_scroll,
+        )
+        self.intro_pause_button.pack(side='left')
+        ttk.Label(
+            controls, text='Колесо мыши или полоса прокрутки — вручную',
+            foreground=self.ui_colors['muted'],
+        ).pack(side='left', padx=12)
+        ttk.Button(
+            controls, text=finish_label, command=finish_command, style='Primary.TButton',
+        ).pack(side='right')
+
+        text.bind('<MouseWheel>', self._on_intro_mousewheel)
+        text.bind('<Button-4>', self._on_intro_mousewheel)
+        text.bind('<Button-5>', self._on_intro_mousewheel)
+        text.bind('<KeyPress>', self._on_intro_keypress)
+        self.intro_user_paused = False
+        self.intro_after_id = None
+        self.intro_manual_pause_id = None
+        self._schedule_intro_scroll()
+
+    def _schedule_intro_scroll(self, delay=180):
+        if (getattr(self, 'intro_user_paused', True)
+                or getattr(self, 'intro_manual_pause_id', None) is not None
+                or not getattr(self, 'intro_text', None)):
+            return
+        if self.intro_after_id is None:
+            self.intro_after_id = self.root.after(delay, self._advance_intro_scroll)
+
+    def _advance_intro_scroll(self):
+        self.intro_after_id = None
+        if getattr(self, 'intro_user_paused', True) or not getattr(self, 'intro_text', None):
+            return
+        try:
+            if self.intro_text.yview()[1] >= 1.0:
+                return
+            self.intro_text.yview_scroll(1, 'units')
+            self._schedule_intro_scroll()
+        except tk.TclError:
+            return
+
+    def _toggle_intro_scroll(self):
+        self.intro_user_paused = not self.intro_user_paused
+        self.intro_pause_button.configure(
+            text='Продолжить' if self.intro_user_paused else 'Пауза',
+        )
+        if self.intro_user_paused:
+            if self.intro_after_id is not None:
+                self.root.after_cancel(self.intro_after_id)
+                self.intro_after_id = None
+        else:
+            self._schedule_intro_scroll()
+
+    def _pause_intro_for_manual_scroll(self):
+        if getattr(self, 'intro_user_paused', True):
+            return
+        if self.intro_after_id is not None:
+            self.root.after_cancel(self.intro_after_id)
+            self.intro_after_id = None
+        if self.intro_manual_pause_id is not None:
+            self.root.after_cancel(self.intro_manual_pause_id)
+        self.intro_manual_pause_id = self.root.after(2200, self._resume_intro_after_manual_scroll)
+
+    def _resume_intro_after_manual_scroll(self):
+        self.intro_manual_pause_id = None
+        self._schedule_intro_scroll()
+
+    def _intro_scrollbar_command(self, *arguments):
+        self._pause_intro_for_manual_scroll()
+        self.intro_text.yview(*arguments)
+
+    def _on_intro_mousewheel(self, event):
+        self._pause_intro_for_manual_scroll()
+        if getattr(event, 'num', None) == 4:
+            delta = -1
+        elif getattr(event, 'num', None) == 5:
+            delta = 1
+        else:
+            delta = -1 if event.delta > 0 else 1
+        self.intro_text.yview_scroll(delta * 3, 'units')
+        return 'break'
+
+    def _on_intro_keypress(self, event):
+        key_scroll = {
+            'Up': (-1, 'units'), 'Down': (1, 'units'),
+            'Prior': (-1, 'pages'), 'Next': (1, 'pages'),
+            'Home': ('top', None), 'End': ('bottom', None),
+        }
+        movement = key_scroll.get(event.keysym)
+        if movement is None:
+            return
+        self._pause_intro_for_manual_scroll()
+        amount, unit = movement
+        if amount == 'top':
+            self.intro_text.yview_moveto(0)
+        elif amount == 'bottom':
+            self.intro_text.yview_moveto(1)
+        else:
+            self.intro_text.yview_scroll(amount, unit)
+        return 'break'
+
     def show_home(self):
         self.clear()
         self.ladder_selection_mode = False
         self.root.title('Неудачный забег')
+        self.audio.play_music('main_menu')
         self._set_page_geometry('600x700')
         colors = self.ui_colors
         frame = ttk.Frame(self.root, padding=(36, 26))
@@ -441,8 +776,8 @@ class CharacterApp:
                                          font=('Segoe UI', 9), anchor='w')
             description_label.pack(fill='x', pady=(2, 0))
             for widget in (tile, title_label, description_label):
-                widget.bind('<Button-1>', lambda _event, action=command: action())
-                widget.bind('<Return>', lambda _event, action=command: action())
+                widget.bind('<Button-1>', lambda _event, action=command: self._activate_menu_tile(action))
+                widget.bind('<Return>', lambda _event, action=command: self._activate_menu_tile(action))
                 widget.bind('<Enter>', lambda _event, card=tile: card.configure(highlightbackground=colors['accent']))
                 widget.bind('<Leave>', lambda _event, card=tile: card.configure(highlightbackground=colors['border']))
             tile.bind('<FocusIn>', lambda _event, card=tile: card.configure(
@@ -460,8 +795,13 @@ class CharacterApp:
         ttk.Label(
             ladder_actions, text=f'Запусков: {ladder_run_count()}', style='LadderCount.TLabel',
         ).pack(side='left', padx=(10, 0))
-        exit_container = ttk.Frame(frame)
-        exit_container.pack(fill='x', pady=(8, 0))
+        footer = ttk.Frame(frame)
+        footer.pack(fill='x', pady=(8, 0))
+        ttk.Button(
+            footer, text='📜 Читать лор', command=self.show_intro,
+        ).pack(side='left', anchor='center')
+        exit_container = ttk.Frame(footer)
+        exit_container.pack(side='right')
         statistics_button = ttk.Button(
             exit_container, text='📊 Статистика забегов',
             command=self.show_ladder_statistics, width=24,
@@ -472,12 +812,13 @@ class CharacterApp:
             anchor='e', pady=(0, 5)
         )
         exit_button = ttk.Button(
-            exit_container, text='⇥ Выйти из игры', command=self.root.destroy, width=24,
+            exit_container, text='⇥ Выйти из игры', command=self.close, width=24,
         )
         exit_button.pack(anchor='e')
 
     def show_ladder_statistics(self):
         self.clear()
+        self.audio.play_music(None)
         page_scale = self._automatic_page_scale(900, 650)
         self._set_page_geometry(f'{int(900 * page_scale)}x{int(650 * page_scale)}')
         frame = ttk.Frame(self.root, padding=22)
@@ -567,7 +908,7 @@ class CharacterApp:
             print(f'[Ладдер] {diagnostic}')
         if invalid_files:
             invalid_list = '\n'.join(invalid_files)
-            messagebox.showerror(
+            self._show_error(
                 'Проверь файлы злодеев',
                 f'Исправь ошибки в файлах злодеев:\n{invalid_list}\n\n'
                 f'Диагностика:\n' + '\n'.join(diagnostics),
@@ -589,8 +930,9 @@ class CharacterApp:
             self.ladder_run_record = create_ladder_run_record(hero_path, villains)
             self.ladder_run_path = None
         except (OSError, UnicodeError, ValueError) as error:
-            messagebox.showerror('Не удалось прочитать выбранного героя', str(error))
+            self._show_error('Не удалось прочитать выбранного героя', str(error))
             return
+        self.audio.play_effect('ladder_start')
         self.show_fight(ladder_mode=True)
 
     def _advance_ladder_fight(self):
@@ -604,7 +946,7 @@ class CharacterApp:
         try:
             Fight.set_character_live_status(loser_path, False)
         except (OSError, UnicodeError) as error:
-            messagebox.showerror(
+            self._show_error(
                 'Не удалось сохранить статус персонажа',
                 f'Не удалось отметить {loser_path.stem} как мёртвого:\n{error}',
             )
@@ -633,7 +975,7 @@ class CharacterApp:
         try:
             self.ladder_run_path = write_completed_ladder_run_record(record)
         except (OSError, ValueError) as error:
-            messagebox.showerror('Не удалось сохранить историю забега', str(error))
+            self._show_error('Не удалось сохранить историю забега', str(error))
 
     def _leave_ladder(self):
         self.ladder_run_record = None
@@ -658,6 +1000,31 @@ class CharacterApp:
         ttk.Checkbutton(appearance, text='Тёмная тема',
                         variable=self.dark_theme_var, command=self._toggle_dark_theme).pack(anchor='w', pady=4)
 
+        sound_settings = ttk.LabelFrame(settings, text='Звук', padding=(18, 12))
+        sound_settings.pack(fill='x', pady=(0, 12))
+        self.sound_enabled_var = tk.BooleanVar(value=self.sound_enabled)
+        ttk.Checkbutton(
+            sound_settings, text='Включить звук', variable=self.sound_enabled_var,
+            command=self._toggle_sound_enabled,
+        ).pack(anchor='w', pady=(0, 8))
+        volume_row = ttk.Frame(sound_settings)
+        volume_row.pack(fill='x')
+        ttk.Label(volume_row, text='Громкость').pack(side='left', padx=(0, 10))
+        self.sound_volume_var = tk.DoubleVar(value=self.sound_volume * 100)
+        self.sound_volume_label_var = tk.StringVar(value=f'{round(self.sound_volume * 100)}%')
+        self.sound_volume_scale = ttk.Scale(
+            volume_row, from_=0, to=100, variable=self.sound_volume_var,
+            command=self._change_sound_volume,
+        )
+        self.sound_volume_scale.pack(side='left', fill='x', expand=True)
+        ttk.Label(volume_row, textvariable=self.sound_volume_label_var, width=5,
+                  anchor='e').pack(side='left', padx=(10, 0))
+        self.sound_volume_scale.configure(
+            state='normal' if self.sound_enabled else 'disabled',
+        )
+        self.sound_volume_scale.bind('<ButtonRelease-1>', lambda _event: self._save_settings())
+        self.sound_volume_scale.bind('<KeyRelease>', lambda _event: self._save_settings())
+
         display = ttk.LabelFrame(settings, text='Окно', padding=(18, 12))
         display.pack(fill='x')
         self.fullscreen_var = tk.BooleanVar(value=self.fullscreen)
@@ -672,8 +1039,22 @@ class CharacterApp:
         resolution_box.pack(anchor='w')
         resolution_box.bind('<<ComboboxSelected>>', self._change_resolution)
 
+    def _toggle_sound_enabled(self):
+        self.sound_enabled = self.sound_enabled_var.get()
+        self.audio.set_enabled(self.sound_enabled)
+        self.sound_volume_scale.configure(
+            state='normal' if self.sound_enabled else 'disabled',
+        )
+        self._save_settings()
+
+    def _change_sound_volume(self, value):
+        self.sound_volume = max(0.0, min(1.0, float(value) / 100))
+        self.sound_volume_label_var.set(f'{round(self.sound_volume * 100)}%')
+        self.audio.set_volume(self.sound_volume)
+
     def show_tournament(self):
         self.clear()
+        self.audio.play_music('tournament')
         page_scale = self._automatic_page_scale(900, 760)
         self._set_page_geometry(f'{int(900 * page_scale)}x{int(760 * page_scale)}')
         if page_scale < 0.95:
@@ -1085,18 +1466,21 @@ class CharacterApp:
             messagebox.showwarning('Мало участников', 'Для турнира нужно добавить в ростер минимум 20 персонажей.')
             return
         paths = [self.tournament_files[int(index)] for index in selected]
+        self.audio.play_effect('tournament_start')
         try:
             result = Tournament.run_tournament(paths)
         except (OSError, ValueError) as error:
-            messagebox.showerror('Ошибка турнира', str(error))
+            self._show_error('Ошибка турнира', str(error))
             return
         self.set_text(self.tournament_result, result['report'])
         self._draw_tournament_bracket(result['bracket'])
         self.show_group_standings(result['group_standings'])
         self.tournament_tabs.select(1)
+        self.audio.play_effect('tournament_complete')
 
     def show_fight(self, ladder_mode=False):
         self.clear()
+        self.audio.play_music('combat')
         self.fight_ladder_mode = ladder_mode
         page_scale = self._automatic_page_scale(900, 760)
         self._set_page_geometry(f'{int(900 * page_scale)}x{int(760 * page_scale)}')
@@ -1319,6 +1703,10 @@ class CharacterApp:
                      fg=main_fg, justify='right', anchor='e', wraplength=120).grid(
                          row=0, column=1, sticky='e')
 
+        if self.fight_ladder_mode and fighter_index == 1:
+            self._draw_ladder_villain_portrait(canvas, fighter_name, properties)
+            return
+
         templates = dict(zip((race.casefold() for race in data.race_sum), ('human', 'orc', 'elf')))
         aliases = dict(templates)
         for race, template in templates.items():
@@ -1413,6 +1801,45 @@ class CharacterApp:
                     canvas.create_image(x, y, image=weapon, anchor='nw')
             canvas.create_image(65, 189, image=character, anchor='s')
 
+    def _draw_ladder_villain_portrait(self, canvas, fighter_name, properties):
+        image_reference = properties.get('image', '').strip()
+        foreground = '#f1f3f5' if self.dark_theme else '#202124'
+        fallback_text = f'{fighter_name}\n\nНет портрета'
+        if not image_reference or image_reference.casefold() in ('none', 'null'):
+            canvas.create_text(65, 97, text=fallback_text, width=120, fill=foreground)
+            return
+
+        relative_path = Path(image_reference)
+        if relative_path.is_absolute():
+            canvas.create_text(65, 97, text=fallback_text, width=120, fill=foreground)
+            return
+        project_root = Path(__file__).resolve().parent
+        image_path = (project_root / relative_path).resolve()
+        try:
+            image_path.relative_to(project_root)
+        except ValueError:
+            canvas.create_text(65, 97, text=fallback_text, width=120, fill=foreground)
+            return
+
+        cache_key = ('villain_portrait', str(image_path))
+        image = self.fight_portrait_sources.get(cache_key)
+        if image is None and image_path.is_file():
+            try:
+                source = tk.PhotoImage(file=str(image_path))
+                scale = max(1, math.ceil(max(source.width() / 130, source.height() / 195)))
+                image = source.subsample(scale, scale)
+                self.fight_portrait_sources[cache_key] = image
+            except tk.TclError:
+                image = None
+
+        if image is None:
+            canvas.create_text(
+                65, 97, text=f'{fighter_name}\n\nПортрет не найден:\n{image_reference}',
+                width=120, fill=foreground, font=('Segoe UI', 8),
+            )
+            return
+        canvas.create_image(65, 97, image=image, anchor='center')
+
     def start_fight(self):
         if self.fight_ladder_mode:
             first_index, second_index = 0, 1
@@ -1445,8 +1872,9 @@ class CharacterApp:
                 check_liveness=(True, not self.fight_ladder_mode),
             )
         except (OSError, ValueError) as error:
-            messagebox.showerror('Ошибка сражения', str(error))
+            self._show_error('Ошибка сражения', str(error))
             return
+        self.audio.play_effect('combat_start')
         self.fight_button.configure(text='Бой идёт…', state='disabled')
         if not self.fight_ladder_mode:
             self.first_fighter.configure(state='disabled')
@@ -1563,6 +1991,14 @@ class CharacterApp:
                 wraplength=270, justify='center',
             )
             if self.fight_ladder_mode:
+                final_ladder_fight = (
+                    winner_index == 1
+                    or self.ladder_index + 1 >= len(self.ladder_villains)
+                )
+                self.audio.play_effect(
+                    ('ladder_run_win' if winner_index == 0 else 'ladder_run_loss')
+                    if final_ladder_fight else 'ladder_battle_win',
+                )
                 self._mark_ladder_loser_dead(winner_index)
                 if winner_index == 0 and self.ladder_index + 1 < len(self.ladder_villains):
                     self._save_ladder_run_progress(fight_result='Победа')
@@ -1578,17 +2014,23 @@ class CharacterApp:
                 if winner_index == 0:
                     self._save_ladder_run_progress(fight_result='Победа', final_result='Победа')
                     messagebox.showinfo(
-                        'Ты победил!',
-                        f'{self.ladder_hero_path.stem} прошёл всех злодеев в ладдере.',
+                        'Поздравляем с победой!',
+                        f'{self.ladder_hero_path.stem} одолел всех {len(self.ladder_villains)} '
+                        'противников и прошёл ладдер!\n\n'
+                        'Теперь откроется последняя глава хроник.',
                     )
+                    self.show_ending_lore()
                 else:
                     self._save_ladder_run_progress(fight_result='Поражение', final_result='Поражение')
                     messagebox.showinfo(
                         'Поражение',
                         f'{self.ladder_hero_path.stem} проиграл бой с {self.ladder_villains[self.ladder_index].stem}.',
                     )
-                self.show_home()
+                    self.show_home()
                 return
+            self.audio.play_effect(
+                'arena_battle_win' if winner_index == 0 else 'arena_battle_loss',
+            )
             self.fight_button.configure(text='Начать сражение', state='normal')
             self.first_fighter.configure(state='readonly')
             self.second_fighter.configure(state='readonly')
@@ -1633,6 +2075,7 @@ class CharacterApp:
                 comparison['winner'],
             ))
             self.fight_history.see(round_item)
+            self.audio.play_effect('round_win' if winner_index == 0 else 'round_loss')
             self.fight_round_index += 1
             self.spin_after_id = self.root.after(550, self._spin_fight_round)
 
@@ -1640,6 +2083,7 @@ class CharacterApp:
 
     def show_create(self):
         self.clear()
+        self.audio.play_music(None)
         page_scale = self._automatic_page_scale(920, 850)
         self._set_page_geometry(f'{int(920 * page_scale)}x{int(850 * page_scale)}')
         frame = ttk.Frame(self.root, padding=(28, 22))
@@ -1876,11 +2320,12 @@ class CharacterApp:
             try:
                 main.file_creation(self.current_hero)
             except OSError as error:
-                messagebox.showerror('Ошибка сохранения', str(error))
+                self._show_error('Ошибка сохранения', str(error))
                 self.generation_active = False
                 self.generate_button.configure(state='normal')
                 return
             self.wheel_status.configure(text='Герой создан!')
+            self.audio.play_effect('character_created')
             self.generation_active = False
             self.generate_button.configure(state='normal')
             self.skip_spin_button.configure(state='disabled')
@@ -2001,7 +2446,7 @@ class CharacterApp:
             with redirect_stdout(greeting):
                 self.current_hero = main.character(name)
         except (OSError, ValueError) as error:
-            messagebox.showerror('Ошибка', str(error))
+            self._show_error('Ошибка', str(error))
             return
         self.generation_active = True
         self.wheel_steps = self._make_wheel_steps(self.current_hero)
@@ -2014,6 +2459,7 @@ class CharacterApp:
 
     def show_characters(self, ladder_selection=False):
         self.clear()
+        self.audio.play_music('collection')
         self.ladder_selection_mode = ladder_selection
         page_scale = self._automatic_page_scale(960, 760)
         self._set_page_geometry(f'{int(960 * page_scale)}x{int(760 * page_scale)}')
@@ -2317,7 +2763,12 @@ class CharacterApp:
         for key, value in updates.items():
             if key not in found:
                 lines.append(f'{key}: {value}')
-        path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        try:
+            path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        except OSError as error:
+            self._show_error('Не удалось улучшить характеристику', str(error))
+            return
+        self.audio.play_effect('stat_upgrade')
         self.open_selected()
         self._refresh_character_gallery()
 
