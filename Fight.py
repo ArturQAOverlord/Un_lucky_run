@@ -10,10 +10,55 @@ def load_character(path):
     character = {}
     with Path(path).open(encoding='utf-8') as file:
         for line in file:
-            key, separator, value = line.rstrip('\n').partition(': ')
+            key, separator, value = line.rstrip('\n').partition(':')
             if separator:
-                character[key] = value
+                character[key.strip()] = value.strip()
     return character
+
+
+def is_character_alive(character_or_path):
+    if isinstance(character_or_path, dict):
+        character = character_or_path
+    else:
+        try:
+            character = load_character(character_or_path)
+        except (OSError, UnicodeError):
+            return False
+    raw_status = character.get('live_status')
+    if raw_status is None:
+        return True
+    return str(raw_status).strip().casefold() not in {
+        'false', '0', 'no', 'dead',
+    }
+
+
+def set_character_live_status(path, is_alive):
+    path = Path(path)
+    lines = path.read_text(encoding='utf-8').splitlines()
+    status_value = str(bool(is_alive))
+    status_found = False
+    updated_lines = []
+    for line in lines:
+        key, separator, _value = line.partition(':')
+        if separator and key.strip() == 'live_status':
+            if not status_found:
+                updated_lines.append(f'{key.strip()}: {status_value}')
+                status_found = True
+            continue
+        updated_lines.append(line)
+    if not status_found:
+        updated_lines.append(f'live_status: {status_value}')
+
+    temporary_path = path.with_suffix(path.suffix + '.tmp')
+    try:
+        temporary_path.write_text('\n'.join(updated_lines) + '\n', encoding='utf-8')
+        temporary_path.replace(path)
+    except OSError:
+        try:
+            temporary_path.unlink()
+        except OSError:
+            pass
+        raise
 
 
 def change_points(path, delta, minimum=0):
@@ -78,12 +123,15 @@ def _score(character):
     return score, details
 
 
-def fight_match(first_path, second_path):
+def fight_match(first_path, second_path, award_points=True, check_liveness=(True, True)):
     first_path, second_path = Path(first_path), Path(second_path)
     if first_path.resolve() == second_path.resolve():
         raise ValueError('Выберите двух разных персонажей.')
 
     first, second = load_character(first_path), load_character(second_path)
+    for character, must_be_alive in zip((first, second), check_liveness):
+        if must_be_alive and not is_character_alive(character):
+            raise ValueError(f"Character {character.get('name', 'Unknown')} is dead and cannot fight.")
     first_score, first_details = _score(first)
     second_score, second_details = _score(second)
     first_luck, second_luck = random.randint(1, 20), random.randint(1, 20)
@@ -94,14 +142,16 @@ def fight_match(first_path, second_path):
     comparisons = []
     for (attribute, first_points), (_, second_points) in zip(first_details, second_details):
         if first_points == second_points:
-            winner = random.choice((first_name, second_name))
+            winner_index = random.randrange(2)
         else:
-            winner = first_name if first_points > second_points else second_name
+            winner_index = 0 if first_points > second_points else 1
+        winner = (first_name, second_name)[winner_index]
         comparisons.append({
             'attribute': attribute,
             'first_points': first_points,
             'second_points': second_points,
             'winner': winner,
+            'winner_index': winner_index,
             'first_name': first_name,
             'second_name': second_name,
         })
@@ -116,27 +166,42 @@ def fight_match(first_path, second_path):
         'Сравниваются сила, скорость, интеллект, боевые навыки, владение оружием и мощь способности. Каждый участник также получает случайный бонус удачи от 1 до 20.',
     ]
     if first_total == second_total:
-        winner = random.choice((first_name, second_name))
+        winner_index = random.randrange(2)
+    else:
+        winner_index = 0 if first_total > second_total else 1
+    winner = (first_name, second_name)[winner_index]
+    if first_total == second_total:
         report.extend(['', f'Ничья по очкам! Победитель выбран случайно: {winner}.'])
     else:
-        winner = first_name if first_total > second_total else second_name
         report.extend(['', f'Победитель: {winner}!'])
-    if winner == first_name:
+    if award_points and winner_index == 0:
         first_points = change_points(first_path, 5)
         second_points = change_points(second_path, -4)
-    else:
+    elif award_points:
         first_points = change_points(first_path, -4)
         second_points = change_points(second_path, 5)
-    report.extend(['', f'Очки: {first_name} — {first_points}, {second_name} — {second_points}.'])
+    else:
+        first_points = _character_points(first)
+        second_points = _character_points(second)
+    if award_points:
+        report.extend(['', f'Очки: {first_name} — {first_points}, {second_name} — {second_points}.'])
     return {
         'report': '\n'.join(report),
         'comparisons': comparisons,
         'winner': winner,
+        'winner_index': winner_index,
         'first_name': first_name,
         'second_name': second_name,
         'first_points_total': first_points,
         'second_points_total': second_points,
     }
+
+
+def _character_points(character):
+    try:
+        return int(character.get('points', 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def fight(first_path, second_path):
@@ -152,6 +217,9 @@ def play(first_path, second_path):
 
     first = load_character(first_path)
     second = load_character(second_path)
+    for character in (first, second):
+        if not is_character_alive(character):
+            raise ValueError(f"Character {character.get('name', 'Unknown')} is dead and cannot fight.")
     first_score, _ = _score(first)
     second_score, _ = _score(second)
     first_total = first_score + random.randint(1, 20)

@@ -28,6 +28,7 @@ class character():
         self.chaos = None
 
         self.title = None
+        self.live_status = True
 
 
 def substory_giver(character):

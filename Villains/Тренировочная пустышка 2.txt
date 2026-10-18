@@ -1,0 +1,19 @@
+name: Тренировочная пустышка 2
+points: 0
+substory: Солдат
+race: Человек
+subrace: Азиат
+size: Средний
+strength: Средняя
+speed: Средняя
+iq: Середняк
+fighting: Среднее
+weapon: Меч
+weapon_mastery: Середняковое
+weapon_enchantment: Кинетическое
+ability: Телепат
+ability_power: Средний пользователь
+chaos: Тронут хаосом
+title: Проверка силы
+image: None
+ladder_index: 2

@@ -7,6 +7,7 @@ import random
 import textwrap
 import unicodedata
 import tkinter as tk
+from datetime import datetime
 from tkinter import messagebox, ttk, font as tkfont
 
 import main
@@ -16,16 +17,151 @@ import Tournament
 
 
 CHARACTERS_DIR = Path(__file__).resolve().parent / 'Characters'
+VILLAINS_DIR = Path(__file__).resolve().parent / 'Villains'
+LADDER_RUNS_DIR = Path(__file__).resolve().parent / 'LadderRuns'
+LADDER_INDEX_KEY = 'ladder_index'
 
 
-def character_files_by_creation_date():
+def character_files_by_creation_date(living_only=False):
     if not CHARACTERS_DIR.exists():
         return []
-    return sorted(
+    paths = sorted(
         CHARACTERS_DIR.glob('*.txt'),
         key=lambda path: (path.stat().st_ctime, path.name.casefold()),
         reverse=True,
     )
+    if living_only:
+        paths = [path for path in paths if Fight.is_character_alive(path)]
+    return paths
+
+
+def villain_files_by_ladder_index():
+    diagnostics = [f'Папка поиска: {VILLAINS_DIR.resolve()}']
+    if not VILLAINS_DIR.exists():
+        diagnostics.append('Папка Villains не найдена.')
+        return [], [], diagnostics
+
+    villains = []
+    invalid_files = []
+    paths = sorted(VILLAINS_DIR.glob('*.txt'), key=lambda path: path.name.casefold())
+    diagnostics.append(f'Найдено файлов *.txt: {len(paths)}')
+    for path in paths:
+        try:
+            properties = {}
+            for line in path.read_text(encoding='utf-8').splitlines():
+                key, separator, value = line.partition(':')
+                if separator:
+                    properties[key.strip()] = value.strip()
+        except (OSError, UnicodeError) as error:
+            invalid_files.append(f'{path.name}: не удалось прочитать файл ({error})')
+            diagnostics.append(f'{path.name}: ошибка чтения ({error})')
+            continue
+        raw_index = properties.get(LADDER_INDEX_KEY)
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            reason = f'нет целого индекса {LADDER_INDEX_KEY}' if raw_index is None else (
+                f'некорректный индекс {LADDER_INDEX_KEY}: {raw_index!r}'
+            )
+            invalid_files.append(f'{path.name}: {reason}')
+            diagnostics.append(f'{path.name}: пропущен — {reason}')
+            continue
+        if index < 1:
+            reason = f'{LADDER_INDEX_KEY} должен быть больше нуля'
+            invalid_files.append(f'{path.name}: {reason}')
+            diagnostics.append(f'{path.name}: пропущен — {reason}')
+            continue
+        villains.append((index, path))
+        diagnostics.append(f'{path.name}: принят, {LADDER_INDEX_KEY}={index}')
+
+    villains.sort(key=lambda item: (item[0], item[1].name.casefold()))
+    diagnostics.append('Порядок боёв: ' + ', '.join(path.name for _index, path in villains))
+    return [path for _index, path in villains], invalid_files, diagnostics
+
+
+def ladder_run_files():
+    if not LADDER_RUNS_DIR.exists():
+        return []
+    return sorted(LADDER_RUNS_DIR.glob('run_*.json'), key=lambda path: path.name.casefold())
+
+
+def ladder_run_count():
+    return len(ladder_run_files())
+
+
+def create_ladder_run_record(hero_path, villain_paths):
+    hero = Fight.load_character(hero_path)
+    now = datetime.now().astimezone().isoformat(timespec='seconds')
+    return {
+        'started_at': now,
+        'updated_at': now,
+        'finished_at': None,
+        'character': {
+            'name': hero.get('name', Path(hero_path).stem),
+            'file': Path(hero_path).name,
+        },
+        'villain_order': [Path(path).stem for path in villain_paths],
+        'current_opponent': Path(villain_paths[0]).stem if villain_paths else None,
+        'last_opponent': None,
+        'fights_completed': 0,
+        'last_fight_result': None,
+        'result': 'В процессе',
+    }
+
+
+def write_completed_ladder_run_record(record):
+    if record.get('result') not in ('Победа', 'Поражение'):
+        raise ValueError('В историю записываются только завершённые победой или поражением забеги.')
+    LADDER_RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    existing_numbers = []
+    for path in ladder_run_files():
+        suffix = path.stem.partition('_')[2]
+        if suffix.isdigit():
+            existing_numbers.append(int(suffix))
+    run_number = max(existing_numbers, default=0) + 1
+    run_path = LADDER_RUNS_DIR / f'run_{run_number:06d}.json'
+    while run_path.exists():
+        run_number += 1
+        run_path = LADDER_RUNS_DIR / f'run_{run_number:06d}.json'
+
+    record['run_number'] = run_number
+    record['updated_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
+    temporary_path = run_path.with_suffix(run_path.suffix + '.tmp')
+    try:
+        temporary_path.write_text(
+            json.dumps(record, ensure_ascii=False, indent=2) + '\n', encoding='utf-8',
+        )
+        temporary_path.replace(run_path)
+    except OSError:
+        try:
+            temporary_path.unlink()
+        except OSError:
+            pass
+        raise
+    return run_path
+
+
+def load_ladder_run_records():
+    records = []
+    unreadable_files = []
+    for path in ladder_run_files():
+        try:
+            record = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            unreadable_files.append(path.name)
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+        else:
+            unreadable_files.append(path.name)
+    def run_number(record):
+        try:
+            return int(record.get('run_number', 0))
+        except (TypeError, ValueError):
+            return 0
+
+    records.sort(key=run_number, reverse=True)
+    return records, unreadable_files
 
 
 class CharacterApp:
@@ -134,8 +270,14 @@ class CharacterApp:
         self.style.configure('Primary.TButton', background=colors['accent'],
                              foreground='#ffffff', padding=(16, 10),
                              font=('Segoe UI', 10, 'bold'), borderwidth=0)
-        self.style.map('Primary.TButton', background=[('active', colors['accent_hover'])],
-                       foreground=[('active', '#ffffff')])
+        self.style.map(
+            'Primary.TButton',
+            background=[('disabled', colors['surface']), ('active', colors['accent_hover'])],
+            foreground=[('disabled', colors['muted']), ('active', '#ffffff')],
+        )
+        self.style.configure('LadderCount.TLabel', background=colors['surface'],
+                             foreground=colors['muted'], padding=(12, 10),
+                             font=('Segoe UI', 10, 'bold'))
         skip_background = '#e0ad4f' if self.dark_theme else '#d99a2b'
         skip_hover = '#efc46d' if self.dark_theme else '#bd7e18'
         skip_foreground = '#17212b'
@@ -269,6 +411,7 @@ class CharacterApp:
 
     def show_home(self):
         self.clear()
+        self.ladder_selection_mode = False
         self.root.title('Неудачный забег')
         self._set_page_geometry('600x700')
         colors = self.ui_colors
@@ -306,8 +449,25 @@ class CharacterApp:
                 highlightbackground=colors['accent'], highlightthickness=2))
             tile.bind('<FocusOut>', lambda _event, card=tile: card.configure(
                 highlightbackground=colors['border'], highlightthickness=1))
+        ladder_area = ttk.Frame(menu)
+        ladder_area.pack(fill='both', expand=True)
+        ladder_actions = ttk.Frame(ladder_area)
+        ladder_actions.pack(anchor='center', pady=(32, 0))
+        ttk.Button(
+            ladder_actions, text='⚔ Забег в ладдер', command=self.show_ladder_picker,
+            style='Primary.TButton',
+        ).pack(side='left')
+        ttk.Label(
+            ladder_actions, text=f'Запусков: {ladder_run_count()}', style='LadderCount.TLabel',
+        ).pack(side='left', padx=(10, 0))
         exit_container = ttk.Frame(frame)
         exit_container.pack(fill='x', pady=(8, 0))
+        statistics_button = ttk.Button(
+            exit_container, text='📊 Статистика забегов',
+            command=self.show_ladder_statistics, width=24,
+            state='normal' if ladder_run_files() else 'disabled',
+        )
+        statistics_button.pack(anchor='e', pady=(0, 5))
         ttk.Button(exit_container, text='⚙ Настройки', command=self.show_options, width=24).pack(
             anchor='e', pady=(0, 5)
         )
@@ -315,6 +475,170 @@ class CharacterApp:
             exit_container, text='⇥ Выйти из игры', command=self.root.destroy, width=24,
         )
         exit_button.pack(anchor='e')
+
+    def show_ladder_statistics(self):
+        self.clear()
+        page_scale = self._automatic_page_scale(900, 650)
+        self._set_page_geometry(f'{int(900 * page_scale)}x{int(650 * page_scale)}')
+        frame = ttk.Frame(self.root, padding=22)
+        frame.pack(fill='both', expand=True)
+        ttk.Button(frame, text='← На главную', command=self.show_home).pack(
+            anchor='w', pady=(0, 12)
+        )
+        self.heading(frame, 'Статистика забегов')
+
+        records, unreadable_files = load_ladder_run_records()
+        wins = sum(record.get('result') == 'Победа' for record in records)
+        losses = sum(record.get('result') == 'Поражение' for record in records)
+        summary = ttk.LabelFrame(frame, text='Итог', padding=10)
+        summary.pack(fill='x', pady=(0, 12))
+        ttk.Label(
+            summary,
+            text=f'Завершено забегов: {len(records)}    Побед: {wins}    Поражений: {losses}',
+            font=('Segoe UI', 11, 'bold'),
+        ).pack(anchor='w')
+
+        history = ttk.LabelFrame(frame, text='История', padding=8)
+        history.pack(fill='both', expand=True)
+        table_area = ttk.Frame(history)
+        table_area.pack(fill='both', expand=True)
+        columns = ('number', 'finished', 'character', 'result', 'fights', 'opponent')
+        table = ttk.Treeview(table_area, columns=columns, show='headings', height=12)
+        headings = (
+            ('number', '№', 58), ('finished', 'Дата завершения', 150),
+            ('character', 'Персонаж', 180), ('result', 'Результат', 120),
+            ('fights', 'Боев', 70), ('opponent', 'Последний соперник', 190),
+        )
+        for column, title, width in headings:
+            table.heading(column, text=title)
+            table.column(column, width=width, minwidth=55, anchor='center',
+                         stretch=column in ('character', 'opponent'))
+        scroll = ttk.Scrollbar(table_area, orient='vertical', command=table.yview)
+        table.configure(yscrollcommand=scroll.set)
+        table.pack(side='left', fill='both', expand=True)
+        scroll.pack(side='right', fill='y')
+        table.tag_configure('victory', foreground='#25834b' if not self.dark_theme else '#91e2ac')
+        table.tag_configure('defeat', foreground='#c34747' if not self.dark_theme else '#ffaaaa')
+
+        for record in records:
+            character = record.get('character', {})
+            if isinstance(character, dict):
+                character_name = character.get('name', 'Неизвестно')
+            else:
+                character_name = str(character)
+            finished = record.get('finished_at') or record.get('started_at', '')
+            try:
+                finished = datetime.fromisoformat(finished).astimezone().strftime('%d.%m.%Y %H:%M')
+            except (TypeError, ValueError):
+                pass
+            result = record.get('result', 'Неизвестно')
+            last_opponent = record.get('last_opponent') or '—'
+            tag = 'victory' if result == 'Победа' else 'defeat' if result == 'Поражение' else ''
+            table.insert('', 'end', tags=(tag,) if tag else (), values=(
+                record.get('run_number', '—'), finished, character_name, result,
+                record.get('fights_completed', 0), last_opponent,
+            ))
+
+        if not records:
+            ttk.Label(history, text='Нет читаемых файлов статистики.', style='Muted.TLabel').pack(
+                anchor='w', pady=(8, 0)
+            )
+        if unreadable_files:
+            ttk.Label(
+                frame, text='Не удалось прочитать: ' + ', '.join(unreadable_files),
+                style='Muted.TLabel',
+            ).pack(anchor='w', pady=(8, 0))
+
+    def show_ladder_picker(self):
+        self.show_characters(ladder_selection=True)
+
+    def start_ladder(self):
+        hero_path = getattr(self, 'selected_character_path', None)
+        if hero_path is None:
+            messagebox.showwarning('Выберите героя', 'Для забега нужно выбрать персонажа из коллекции.')
+            return
+        if not Fight.is_character_alive(hero_path):
+            messagebox.showwarning('Персонаж мёртв', 'Мёртвый персонаж не может участвовать в ладдере.')
+            self.show_ladder_picker()
+            return
+
+        villains, invalid_files, diagnostics = villain_files_by_ladder_index()
+        for diagnostic in diagnostics:
+            print(f'[Ладдер] {diagnostic}')
+        if invalid_files:
+            invalid_list = '\n'.join(invalid_files)
+            messagebox.showerror(
+                'Проверь файлы злодеев',
+                f'Исправь ошибки в файлах злодеев:\n{invalid_list}\n\n'
+                f'Диагностика:\n' + '\n'.join(diagnostics),
+            )
+            return
+        if not villains:
+            messagebox.showinfo(
+                'Ладдер пока пуст',
+                f'Добавь в папку Villains файлы злодеев с целым положительным '
+                f'индексом {LADDER_INDEX_KEY}.\n\n'
+                f'Диагностика:\n' + '\n'.join(diagnostics),
+            )
+            return
+
+        self.ladder_hero_path = hero_path
+        self.ladder_villains = villains
+        self.ladder_index = 0
+        try:
+            self.ladder_run_record = create_ladder_run_record(hero_path, villains)
+            self.ladder_run_path = None
+        except (OSError, UnicodeError, ValueError) as error:
+            messagebox.showerror('Не удалось прочитать выбранного героя', str(error))
+            return
+        self.show_fight(ladder_mode=True)
+
+    def _advance_ladder_fight(self):
+        self.ladder_index += 1
+        self.show_fight(ladder_mode=True)
+
+    def _mark_ladder_loser_dead(self, winner_index):
+        if winner_index != 1:
+            return
+        loser_path = self.ladder_hero_path
+        try:
+            Fight.set_character_live_status(loser_path, False)
+        except (OSError, UnicodeError) as error:
+            messagebox.showerror(
+                'Не удалось сохранить статус персонажа',
+                f'Не удалось отметить {loser_path.stem} как мёртвого:\n{error}',
+            )
+
+    def _save_ladder_run_progress(self, fight_result=None, final_result=None):
+        record = getattr(self, 'ladder_run_record', None)
+        if record is None:
+            return
+
+        if fight_result is not None:
+            opponent = self.ladder_villains[self.ladder_index]
+            record['last_opponent'] = opponent.stem
+            record['last_fight_result'] = fight_result
+            record['fights_completed'] = self.ladder_index + 1
+            next_index = self.ladder_index + 1
+            record['current_opponent'] = (
+                self.ladder_villains[next_index].stem
+                if next_index < len(self.ladder_villains) else None
+            )
+        if final_result is not None:
+            record['result'] = final_result
+            record['finished_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
+        record['updated_at'] = datetime.now().astimezone().isoformat(timespec='seconds')
+        if final_result is None:
+            return
+        try:
+            self.ladder_run_path = write_completed_ladder_run_record(record)
+        except (OSError, ValueError) as error:
+            messagebox.showerror('Не удалось сохранить историю забега', str(error))
+
+    def _leave_ladder(self):
+        self.ladder_run_record = None
+        self.ladder_run_path = None
+        self.show_home()
 
     def show_options(self):
         self.clear()
@@ -372,7 +696,7 @@ class CharacterApp:
             frame.pack(fill='both', expand=True)
         ttk.Button(frame, text='← На главную', command=self.show_home).pack(anchor='w', pady=(0, 12))
         self.heading(frame, 'Турнир')
-        files = character_files_by_creation_date()
+        files = character_files_by_creation_date(living_only=True)
         self.tournament_files = files
 
         ttk.Label(frame, text='Доступные персонажи').pack(anchor='w')
@@ -676,6 +1000,8 @@ class CharacterApp:
             for item in self.roster_table.get_children()
         } if hasattr(self, 'roster_table') and self.roster_table.winfo_exists() else set()
         for index, path in enumerate(self.tournament_files):
+            if not Fight.is_character_alive(path):
+                continue
             if query and query not in path.stem.casefold():
                 continue
             if path.stem.casefold() in roster_names:
@@ -687,6 +1013,11 @@ class CharacterApp:
         if not selection:
             return
         item_id = selection[0]
+        path = self.tournament_files[int(item_id)]
+        if not Fight.is_character_alive(path):
+            messagebox.showwarning('Персонаж мёртв', 'Мёртвого персонажа нельзя добавить в турнир.')
+            self._filter_tournament_available()
+            return
         if self.roster_table.exists(item_id):
             return
         self.roster_table.insert('', 'end', iid=item_id, values=self.available_table.item(item_id, 'values'))
@@ -737,6 +1068,19 @@ class CharacterApp:
 
     def start_tournament(self):
         selected = self.roster_table.get_children()
+        dead_ids = {
+            item_id for item_id in selected
+            if not Fight.is_character_alive(self.tournament_files[int(item_id)])
+        }
+        if dead_ids:
+            for item_id in dead_ids:
+                self.roster_table.delete(item_id)
+            self.update_roster_count()
+            messagebox.showwarning(
+                'Персонаж мёртв',
+                'Мёртвые персонажи удалены из ростера. Выбери живых участников.',
+            )
+            return
         if len(selected) < Tournament.MIN_ROSTER_SIZE:
             messagebox.showwarning('Мало участников', 'Для турнира нужно добавить в ростер минимум 20 персонажей.')
             return
@@ -751,8 +1095,9 @@ class CharacterApp:
         self.show_group_standings(result['group_standings'])
         self.tournament_tabs.select(1)
 
-    def show_fight(self):
+    def show_fight(self, ladder_mode=False):
         self.clear()
+        self.fight_ladder_mode = ladder_mode
         page_scale = self._automatic_page_scale(900, 760)
         self._set_page_geometry(f'{int(900 * page_scale)}x{int(760 * page_scale)}')
         if page_scale < 0.95:
@@ -773,11 +1118,20 @@ class CharacterApp:
         else:
             frame = ttk.Frame(self.root, padding=18)
             frame.pack(fill='both', expand=True)
-        ttk.Button(frame, text='← На главную', command=self.show_home).pack(anchor='w', pady=(0, 12))
-        self.heading(frame, 'Сражение персонажей')
-        files = character_files_by_creation_date()
+        if not ladder_mode:
+            ttk.Button(frame, text='← На главную', command=self.show_home).pack(
+                anchor='w', pady=(0, 12)
+            )
+        if ladder_mode:
+            current_villain = self.ladder_villains[self.ladder_index]
+            files = [self.ladder_hero_path, current_villain]
+            page_title = f'Забег в ладдер · бой {self.ladder_index + 1} из {len(self.ladder_villains)}'
+        else:
+            files = character_files_by_creation_date(living_only=True)
+            page_title = 'Сражение персонажей'
+        self.heading(frame, page_title)
         if len(files) < 2:
-            ttk.Label(frame, text='Для сражения нужно сохранить минимум двух персонажей.').pack(anchor='w')
+            ttk.Label(frame, text='Для сражения нужны минимум два живых персонажа.').pack(anchor='w')
             return
         self.fight_files = files
         names = [file.stem for file in files]
@@ -797,13 +1151,26 @@ class CharacterApp:
             left.pack(side='left', fill='y', expand=True, padx=(0, 8))
             center.pack(side='left', fill='y')
             right.pack(side='left', fill='y', expand=True, padx=(8, 0))
-        self.first_fighter = ttk.Combobox(left, state='readonly', values=names)
-        self.first_fighter.pack(fill='x', padx=3)
-        self.second_fighter = ttk.Combobox(right, state='readonly', values=names)
-        self.second_fighter.pack(fill='x', padx=3)
-        self.first_fighter.current(0)
-        self.second_fighter.current(1)
-        self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
+        if ladder_mode:
+            fighter_name_style = {
+                'background': self.ui_colors['surface'],
+                'foreground': self.ui_colors['foreground'],
+                'font': ('Segoe UI', 10, 'bold'),
+                'anchor': 'center',
+            }
+            tk.Label(left, text=names[0], **fighter_name_style).pack(fill='x', padx=3, pady=(1, 3))
+            tk.Label(right, text=names[1], **fighter_name_style).pack(fill='x', padx=3, pady=(1, 3))
+            self.first_fighter = None
+            self.second_fighter = None
+            self.fight_names = (names[0], names[1])
+        else:
+            self.first_fighter = ttk.Combobox(left, state='readonly', values=names)
+            self.first_fighter.pack(fill='x', padx=3)
+            self.second_fighter = ttk.Combobox(right, state='readonly', values=names)
+            self.second_fighter.pack(fill='x', padx=3)
+            self.first_fighter.current(0)
+            self.second_fighter.current(1)
+            self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
         self.fight_rotation = 0
         self.fight_portrait_canvases = []
         self.fight_stat_labels = []
@@ -826,8 +1193,9 @@ class CharacterApp:
             card.pack(fill='x', padx=3, pady=(5, 0), anchor='nw')
             self.fight_stat_labels.append(card)
         self.fight_portrait_sources = {}
-        self.first_fighter.bind('<<ComboboxSelected>>', lambda _event: self._on_fight_selection_changed(0))
-        self.second_fighter.bind('<<ComboboxSelected>>', lambda _event: self._on_fight_selection_changed(1))
+        if not ladder_mode:
+            self.first_fighter.bind('<<ComboboxSelected>>', lambda _event: self._on_fight_selection_changed(0))
+            self.second_fighter.bind('<<ComboboxSelected>>', lambda _event: self._on_fight_selection_changed(1))
         self.fight_status = ttk.Label(center, text='', anchor='center')
         self.fight_status.pack(fill='x', pady=(0, 4))
         wheel_scale = self._wheel_scale(600, 640)
@@ -883,14 +1251,20 @@ class CharacterApp:
     def _draw_fight_portrait(self, fighter_index):
         if fighter_index not in (0, 1):
             return
-        selector = self.first_fighter if fighter_index == 0 else self.second_fighter
         canvas = self.fight_portrait_canvases[fighter_index]
         canvas.delete('all')
-        index = selector.current()
-        if index < 0:
-            return
+        if self.fight_ladder_mode:
+            character_path = self.fight_files[fighter_index]
+            fighter_name = character_path.stem
+        else:
+            selector = self.first_fighter if fighter_index == 0 else self.second_fighter
+            index = selector.current()
+            if index < 0:
+                return
+            character_path = self.fight_files[index]
+            fighter_name = selector.get()
         try:
-            lines = self.fight_files[index].read_text(encoding='utf-8').splitlines()
+            lines = character_path.read_text(encoding='utf-8').splitlines()
         except OSError:
             return
         properties = {}
@@ -954,7 +1328,7 @@ class CharacterApp:
                 pass
         template = aliases.get(properties.get('race', '').casefold())
         if not template:
-            canvas.create_text(65, 97, text=selector.get(), width=120,
+            canvas.create_text(65, 97, text=fighter_name, width=120,
                                fill='#f1f3f5' if self.dark_theme else '#202124')
             return
 
@@ -1040,29 +1414,51 @@ class CharacterApp:
             canvas.create_image(65, 189, image=character, anchor='s')
 
     def start_fight(self):
-        first_index = self.first_fighter.current()
-        second_index = self.second_fighter.current()
+        if self.fight_ladder_mode:
+            first_index, second_index = 0, 1
+        else:
+            first_index = self.first_fighter.current()
+            second_index = self.second_fighter.current()
         if first_index < 0 or second_index < 0:
             messagebox.showwarning('Выберите персонажей', 'Нужно выбрать обоих участников.')
             return
         if first_index == second_index:
             messagebox.showwarning('Выберите разных', 'Один персонаж не может сражаться с самим собой.')
             return
+        selected_paths = (
+            (self.ladder_hero_path,) if self.fight_ladder_mode else
+            (self.fight_files[first_index], self.fight_files[second_index])
+        )
+        if any(not Fight.is_character_alive(path) for path in selected_paths):
+            messagebox.showwarning(
+                'Персонаж мёртв', 'Мёртвые персонажи не могут участвовать в сражении.'
+            )
+            if self.fight_ladder_mode:
+                self._leave_ladder()
+            else:
+                self.show_fight()
+            return
         try:
-            result = Fight.fight_match(self.fight_files[first_index], self.fight_files[second_index])
+            result = Fight.fight_match(
+                self.fight_files[first_index], self.fight_files[second_index],
+                award_points=not self.fight_ladder_mode,
+                check_liveness=(True, not self.fight_ladder_mode),
+            )
         except (OSError, ValueError) as error:
             messagebox.showerror('Ошибка сражения', str(error))
             return
-        self.fight_button.configure(state='disabled')
-        self.first_fighter.configure(state='disabled')
-        self.second_fighter.configure(state='disabled')
+        self.fight_button.configure(text='Бой идёт…', state='disabled')
+        if not self.fight_ladder_mode:
+            self.first_fighter.configure(state='disabled')
+            self.second_fighter.configure(state='disabled')
         self.fight_rounds = result['comparisons']
         self.fight_report = result['report']
-        self.fight_winner_index = 0 if result['winner'] == result['first_name'] else 1
+        self.fight_winner_index = result['winner_index']
         self.fight_winner = self.fight_names[self.fight_winner_index]
         self.fight_round_index = 0
         self.fight_rotation = 0
-        self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
+        if not self.fight_ladder_mode:
+            self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
         self.fight_history.delete(*self.fight_history.get_children())
         self.fight_status.configure(style='TLabel', wraplength=0)
         for panel, outcome, stats_card, portrait in zip(
@@ -1166,7 +1562,34 @@ class CharacterApp:
                 text=f'✦ ПОБЕДИТЕЛЬ: {winner} ✦', style='FightWinner.TLabel',
                 wraplength=270, justify='center',
             )
-            self.fight_button.configure(state='normal')
+            if self.fight_ladder_mode:
+                self._mark_ladder_loser_dead(winner_index)
+                if winner_index == 0 and self.ladder_index + 1 < len(self.ladder_villains):
+                    self._save_ladder_run_progress(fight_result='Победа')
+                    next_villain = self.ladder_villains[self.ladder_index + 1].stem
+                    self.fight_status.configure(
+                        text=f'ПОБЕДА! Следующий соперник: {next_villain}',
+                        wraplength=270, justify='center',
+                    )
+                    self.fight_button.configure(
+                        text='Следующий бой', command=self._advance_ladder_fight, state='normal',
+                    )
+                    return
+                if winner_index == 0:
+                    self._save_ladder_run_progress(fight_result='Победа', final_result='Победа')
+                    messagebox.showinfo(
+                        'Ты победил!',
+                        f'{self.ladder_hero_path.stem} прошёл всех злодеев в ладдере.',
+                    )
+                else:
+                    self._save_ladder_run_progress(fight_result='Поражение', final_result='Поражение')
+                    messagebox.showinfo(
+                        'Поражение',
+                        f'{self.ladder_hero_path.stem} проиграл бой с {self.ladder_villains[self.ladder_index].stem}.',
+                    )
+                self.show_home()
+                return
+            self.fight_button.configure(text='Начать сражение', state='normal')
             self.first_fighter.configure(state='readonly')
             self.second_fighter.configure(state='readonly')
             self.first_fighter.selection_clear()
@@ -1175,7 +1598,7 @@ class CharacterApp:
             return
 
         comparison = self.fight_rounds[self.fight_round_index]
-        winner_index = 0 if comparison['winner'] == comparison['first_name'] else 1
+        winner_index = comparison['winner_index']
         first_points = max(0, comparison['first_points'])
         second_points = max(0, comparison['second_points'])
         total_points = first_points + second_points
@@ -1203,7 +1626,7 @@ class CharacterApp:
                 return
             self.fight_rotation = target
             self.fight_status.configure(text=f"{comparison['attribute']}: {comparison['winner']}")
-            row_tag = 'first-wins' if comparison['winner'] == comparison['first_name'] else 'second-wins'
+            row_tag = 'first-wins' if comparison['winner_index'] == 0 else 'second-wins'
             round_item = self.fight_history.insert('', 'end', tags=(row_tag,), values=(
                 self.fight_round_index + 1, comparison['attribute'],
                 f"{comparison['first_points']}:{comparison['second_points']}",
@@ -1589,14 +2012,15 @@ class CharacterApp:
         self.generate_button.configure(state='disabled')
         self._spin_next()
 
-    def show_characters(self):
+    def show_characters(self, ladder_selection=False):
         self.clear()
+        self.ladder_selection_mode = ladder_selection
         page_scale = self._automatic_page_scale(960, 760)
         self._set_page_geometry(f'{int(960 * page_scale)}x{int(760 * page_scale)}')
         frame = ttk.Frame(self.root, padding=20)
         frame.pack(fill='both', expand=True)
         ttk.Button(frame, text='← На главную', command=self.show_home).pack(anchor='w', pady=(0, 10))
-        self.heading(frame, 'Коллекция героев')
+        self.heading(frame, 'Выбор героя для ладдера' if ladder_selection else 'Коллекция героев')
         body = ttk.Frame(frame)
         body.pack(fill='both', expand=True)
         gallery = ttk.LabelFrame(body, text='Ваши персонажи', padding=8)
@@ -1609,13 +2033,29 @@ class CharacterApp:
         search.insert(0, '')
         self.character_sort_var = tk.StringVar(value='Сначала новые')
         sort_box = ttk.Combobox(controls, state='readonly', textvariable=self.character_sort_var,
-                                values=('Сначала новые', 'Сначала старые', 'По имени', 'По очкам (по убыванию)', 'По очкам (по возрастанию)'), width=28)
+                                values=(
+                                    'Сначала новые', 'Сначала старые', 'По имени',
+                                    'По очкам (по убыванию)', 'По очкам (по возрастанию)',
+                                    'Живые сначала', 'Мёртвые сначала',
+                                ), width=28)
         sort_box.pack(fill='x', pady=(0, 5))
+        self.character_status_var = tk.StringVar(value='Живые' if ladder_selection else 'Все')
+        if not ladder_selection:
+            status_box = ttk.Combobox(
+                controls, state='readonly', textvariable=self.character_status_var,
+                values=('Все', 'Живые', 'Мёртвые'),
+            )
+            status_box.pack(fill='x', pady=(0, 5))
+            status_box.bind('<<ComboboxSelected>>', lambda _event: self._refresh_character_gallery())
         races = ['Все расы'] + [self._readable_creation_value(race) for race in data.race_sum]
         self.character_race_var = tk.StringVar(value=races[0])
         race_box = ttk.Combobox(controls, state='readonly', textvariable=self.character_race_var,
                                 values=races)
         race_box.pack(fill='x')
+        ttk.Button(
+            controls, text='Сбросить поиск и фильтры',
+            command=self._reset_character_filters,
+        ).pack(fill='x', pady=(5, 0))
         self.gallery_count = ttk.Label(controls, text='', style='Muted.TLabel')
         self.gallery_count.pack(anchor='w', pady=(6, 0))
 
@@ -1647,6 +2087,12 @@ class CharacterApp:
         self.detail.configure(yscrollcommand=detail_scroll.set)
         self.detail.pack(side='left', fill='both', expand=True)
         detail_scroll.pack(side='right', fill='y')
+        if ladder_selection:
+            self.ladder_start_button = ttk.Button(
+                preview, text='Начать забег', command=self.start_ladder,
+                style='Primary.TButton', state='disabled',
+            )
+            self.ladder_start_button.pack(fill='x', pady=(8, 0))
         self.stat_upgrade_fields = {'strength', 'speed', 'iq', 'fighting', 'weapon_mastery', 'ability_power'}
         for widget in (detail_frame, self.detail):
             widget.bind('<MouseWheel>', self._scroll_character_preview)
@@ -1657,7 +2103,7 @@ class CharacterApp:
         self.card_character_cache = {}
         self.card_weapon_sources = {}
         self.card_weapon_cache = {}
-        self.files = character_files_by_creation_date()
+        self.files = character_files_by_creation_date(living_only=ladder_selection)
         self.visible_files = []
         self.selected_character_path = None
         self.character_search_var.trace_add('write', lambda *_args: self._refresh_character_gallery())
@@ -1668,7 +2114,7 @@ class CharacterApp:
     def _read_character_properties(self, path):
         try:
             lines = path.read_text(encoding='utf-8').splitlines()
-        except OSError:
+        except (OSError, UnicodeError):
             return {}
         properties = {}
         for line in lines:
@@ -1729,18 +2175,31 @@ class CharacterApp:
             canvas.create_line(x + 25, y + 10, x + 30, y + 18,
                                fill=accent, width=2, tags=(tag,))
 
+    def _reset_character_filters(self):
+        self.character_sort_var.set('Сначала новые')
+        self.character_status_var.set('Живые' if self.ladder_selection_mode else 'Все')
+        self.character_race_var.set('Все расы')
+        self.character_search_var.set('')
+        self._refresh_character_gallery()
+
     def _refresh_character_gallery(self, select_first=False):
         if not hasattr(self, 'gallery_canvas') or not self.gallery_canvas.winfo_exists():
             return
         self.gallery_canvas.delete('all')
         query = self.character_search_var.get().strip().casefold()
         selected_race = self.character_race_var.get()
+        selected_status = self.character_status_var.get()
         all_races = 'Все расы'
         filtered = []
         properties_by_path = {}
         for path in self.files:
             props = self._read_character_properties(path)
             properties_by_path[path] = props
+            is_alive = Fight.is_character_alive(props)
+            if (self.ladder_selection_mode or selected_status == 'Живые') and not is_alive:
+                continue
+            if selected_status == 'Мёртвые' and is_alive:
+                continue
             race = self._readable_creation_value(props.get('race', ''))
             haystack = ' '.join((path.stem, *(self._readable_creation_value(value) for value in props.values()))).casefold()
             if query and query not in haystack:
@@ -1757,6 +2216,14 @@ class CharacterApp:
             filtered.sort(key=lambda path: int(properties_by_path[path].get('points', 0) or 0), reverse=True)
         elif sort_mode == 'По очкам (по возрастанию)':
             filtered.sort(key=lambda path: int(properties_by_path[path].get('points', 0) or 0))
+        elif sort_mode == 'Живые сначала':
+            filtered.sort(key=lambda path: (
+                not Fight.is_character_alive(properties_by_path[path]), -path.stat().st_mtime,
+            ))
+        elif sort_mode == 'Мёртвые сначала':
+            filtered.sort(key=lambda path: (
+                Fight.is_character_alive(properties_by_path[path]), -path.stat().st_mtime,
+            ))
         else:
             filtered.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         self.visible_files = filtered
@@ -1766,6 +2233,8 @@ class CharacterApp:
         self._render_character_gallery()
         if not filtered:
             self.selected_character_path = None
+            if getattr(self, 'ladder_selection_mode', False) and hasattr(self, 'ladder_start_button'):
+                self.ladder_start_button.configure(state='disabled')
             self._draw_character_card({})
             self._clear_preview_rows()
             return
@@ -1777,17 +2246,29 @@ class CharacterApp:
     def _select_character(self, path):
         same_selection = path == self.selected_character_path
         self.selected_character_path = path
+        if getattr(self, 'ladder_selection_mode', False) and hasattr(self, 'ladder_start_button'):
+            self.ladder_start_button.configure(state='normal')
         for tile_path, background_id in self.gallery_tiles.items():
             selected = tile_path == path
+            is_dead = not Fight.is_character_alive(self.gallery_properties.get(tile_path, {}))
+            dead_outline = '#c73d46' if not self.dark_theme else '#ff707a'
             self.gallery_canvas.itemconfigure(
                 background_id,
-                outline=self.ui_colors['accent'] if selected else self.ui_colors['border'],
+                outline=dead_outline if is_dead else (
+                    self.ui_colors['accent'] if selected else self.ui_colors['border']
+                ),
                 width=2 if selected else 1,
             )
         if not same_selection:
             self.open_selected()
 
     def _set_gallery_tile_hover(self, path, background_id, hovering):
+        if not Fight.is_character_alive(self.gallery_properties.get(path, {})):
+            outline, width = (
+                ('#c73d46', 2) if not self.dark_theme else ('#ff707a', 2)
+            )
+            self.gallery_canvas.itemconfigure(background_id, outline=outline, width=width)
+            return
         selected = path == self.selected_character_path
         if selected:
             outline, width = self.ui_colors['accent'], 2
@@ -1798,6 +2279,8 @@ class CharacterApp:
         self.gallery_canvas.itemconfigure(background_id, outline=outline, width=width)
 
     def _upgrade_character_stat(self, stat):
+        if getattr(self, 'ladder_selection_mode', False):
+            return
         path = getattr(self, 'selected_character_path', None)
         pools = {
             'strength': (data.strength_sum, data.strength_weights),
@@ -1883,13 +2366,19 @@ class CharacterApp:
                     break
                 path = self.visible_files[index]
                 props = self.gallery_properties[path]
+                is_dead = not Fight.is_character_alive(props)
+                dead_fill = '#fbe4e4' if not self.dark_theme else '#3c2429'
+                dead_outline = '#c73d46' if not self.dark_theme else '#ff707a'
+                dead_foreground = '#a8232d' if not self.dark_theme else '#ff9aa0'
                 x = margin + column * (tile_width + gap)
                 tag = f'gallery_tile_{index}'
                 selected = path == self.selected_character_path
                 background_id = canvas.create_rectangle(
                     x, y, x + tile_width, y + tile_height,
-                    fill=self.ui_colors['input'],
-                    outline=self.ui_colors['accent'] if selected else self.ui_colors['border'],
+                    fill=dead_fill if is_dead else self.ui_colors['input'],
+                    outline=dead_outline if is_dead else (
+                        self.ui_colors['accent'] if selected else self.ui_colors['border']
+                    ),
                     width=2 if selected else 1, tags=(tag,),
                 )
                 self.gallery_tiles[path] = background_id
@@ -1897,7 +2386,8 @@ class CharacterApp:
                 canvas.create_text(
                     x + 54, y + 9, text=path.stem, anchor='nw',
                     width=max(40, tile_width - 64),
-                    fill=self.ui_colors['foreground'], font=('Segoe UI', 9, 'bold'), tags=(tag,),
+                    fill=dead_foreground if is_dead else self.ui_colors['foreground'],
+                    font=('Segoe UI', 9, 'bold'), tags=(tag,),
                 )
                 race = self._readable_creation_value(' '.join(filter(None, (
                     props.get('subrace', ''), props.get('race', ''),
@@ -1906,7 +2396,8 @@ class CharacterApp:
                 canvas.create_text(
                     x + 10, y + 52,
                     text='\n'.join(value for value in (race, size) if value), anchor='nw',
-                    width=max(50, tile_width - 20), fill=self.ui_colors['muted'],
+                    width=max(50, tile_width - 20),
+                    fill=dead_foreground if is_dead else self.ui_colors['muted'],
                     font=('Segoe UI', 8), tags=(tag,),
                 )
                 points = props.get('points', '0').strip() or '0'
@@ -1915,12 +2406,14 @@ class CharacterApp:
                 badge_top = y + tile_height - 27
                 canvas.create_rectangle(
                     badge_left, badge_top, x + tile_width - 8, y + tile_height - 7,
-                    fill=self.ui_colors['surface'], outline=self.ui_colors['accent'],
+                    fill=dead_fill if is_dead else self.ui_colors['surface'],
+                    outline=dead_outline if is_dead else self.ui_colors['accent'],
                     width=1, tags=(tag,),
                 )
                 canvas.create_text(
                     (badge_left + x + tile_width - 8) / 2, badge_top + 10,
-                    text=f'Очки: {points}', fill=self.ui_colors['foreground'],
+                    text='Мёртв' if is_dead else f'Очки: {points}',
+                    fill=dead_foreground if is_dead else self.ui_colors['foreground'],
                     font=('Segoe UI', 8, 'bold'), tags=(tag,),
                 )
                 row_items.append((path, tag, background_id))
@@ -1950,6 +2443,12 @@ class CharacterApp:
     def _draw_character_card(self, properties):
         canvas = self.card_canvas
         canvas.delete('all')
+        is_dead = not Fight.is_character_alive(properties)
+        dead_border = '#c73d46' if not self.dark_theme else '#ff707a'
+        dead_background = '#fbe4e4' if not self.dark_theme else '#3c2429'
+        dead_bar = '#8f2730' if not self.dark_theme else '#55232a'
+        dead_label = '#ffe8e9'
+        canvas.configure(background=dead_background if is_dead else self.ui_colors['surface'])
         race = properties.get('race', '').casefold()
         race_template_names = dict(zip((race.casefold() for race in data.race_sum), ('human', 'orc', 'elf')))
         for race_value, template in zip(data.race_sum, ('human', 'orc', 'elf')):
@@ -2032,20 +2531,21 @@ class CharacterApp:
             )
             canvas.create_image(figure_x, figure_bottom, image=figure, anchor='s')
 
+        bar_background = dead_bar if is_dead else '#17212b'
         canvas.create_rectangle(left + 3, top + 4, left + 257, top + 60,
-                                fill='#17212b', outline='')
+                                fill=bar_background, outline='')
         canvas.create_rectangle(left + 3, top + 306, left + 257, top + 387,
-                                fill='#17212b', outline='')
+                                fill=bar_background, outline='')
 
         def label(y, text, size=9, bold=False, width=224):
             options = dict(text=text, width=width, justify='center',
                            font=('Segoe UI', size, 'bold' if bold else 'normal'))
             canvas.create_text(left + 130, top + y + 1, fill='#17191c', **options)
-            canvas.create_text(left + 129, top + y, fill='#fff4d6', **options)
+            canvas.create_text(left + 129, top + y, fill=dead_label if is_dead else '#fff4d6', **options)
 
         label(17, textwrap.shorten(properties.get('name', 'Новый персонаж'), 26), 12, True)
         race_line = ' '.join(filter(None, (properties.get('subrace'), properties.get('race'))))
-        label(39, textwrap.shorten(race_line, 32), 8, True)
+        label(39, 'Мёртв' if is_dead else textwrap.shorten(race_line, 32), 8, True)
         label(315, textwrap.shorten(properties.get('title', ''), 32), 8, True)
         label(338, f"Рост: {properties.get('size', '—')}", 8, True)
         label(357, f"Оружие: {properties.get('weapon', '—')}", 8)
@@ -2053,7 +2553,7 @@ class CharacterApp:
         if ability_power and ability_power != 'None':
             ability = f'{ability} · {ability_power}'
         label(376, f'Сила: {textwrap.shorten(ability, 30)}', 8)
-        accent = '#d3aa56' if self.dark_theme else '#b4822e'
+        accent = dead_border if is_dead else ('#d3aa56' if self.dark_theme else '#b4822e')
         canvas.create_line(left + 20, top + 60, left + 240, top + 60,
                            fill=accent, width=2)
         canvas.create_line(left + 20, top + 306, left + 240, top + 306,
@@ -2221,7 +2721,10 @@ class CharacterApp:
             if not raw_value or raw_value.casefold() == 'none':
                 continue
             value = self._readable_creation_value(raw_value)
-            action_width = 62 if key in self.stat_upgrade_fields else 0
+            show_upgrade = key in self.stat_upgrade_fields and not getattr(
+                self, 'ladder_selection_mode', False
+            )
+            action_width = 62 if show_upgrade else 0
             label_width = min(165, max(108, label_font.measure(label) + 10))
             value_width = max(50, right - left - label_width - action_width - gap * 3)
             value_chars = max(8, value_width // 8)
@@ -2241,7 +2744,7 @@ class CharacterApp:
                 value_right, y + row_height / 2, text=value, anchor='e',
                 width=value_width, fill=self.ui_colors['foreground'], font=('Segoe UI', 12),
             )
-            if key in self.stat_upgrade_fields:
+            if show_upgrade:
                 cost = upgrade_costs.get(key)
                 can_upgrade = cost is not None and points >= cost
                 if key == 'weapon_mastery' and properties.get('weapon', '') == data.weapon_sum[0]:

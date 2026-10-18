@@ -1,0 +1,19 @@
+name: Тренировочная пустышка 3
+points: 0
+substory: Королевских кровей
+race: Эльф
+subrace: Высший
+size: Гигантский
+strength: Беспрецентная
+speed: Беспрецентная
+iq: Гений
+fighting: Непревзойденное
+weapon: Катана
+weapon_mastery: Легендарное
+weapon_enchantment: Огненное
+ability: Энергетический манипулятор
+ability_power: Абсолют
+chaos: Избран богами
+title: Финальная проверка
+image: None
+ladder_index: 3

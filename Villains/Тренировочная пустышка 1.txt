@@ -1,0 +1,19 @@
+name: Тренировочная пустышка 1
+points: 0
+substory: Солдат
+race: Орк
+subrace: Полуорк
+size: Мелкий
+strength: Мала
+speed: медленная
+iq: Туповат
+fighting: Неопытное
+weapon: Без оружия
+weapon_mastery: None
+weapon_enchantment: None
+ability: Без силы
+ability_power: None
+chaos: None
+title: Учебная цель
+image: None
+ladder_index: 1
