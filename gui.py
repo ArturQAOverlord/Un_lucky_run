@@ -104,11 +104,11 @@ class CharacterApp:
         if self.dark_theme:
             colors = {'background': '#111820', 'surface': '#1b2632', 'input': '#253342',
                       'foreground': '#e8eef3', 'muted': '#9aabb9', 'accent': '#477c86',
-                      'accent_hover': '#568f98', 'border': '#2b3947'}
+                      'accent_hover': '#568f98', 'border': '#2b3947', 'hover': '#3a5e6a'}
         else:
             colors = {'background': '#f3f6f8', 'surface': '#ffffff', 'input': '#ffffff',
                       'foreground': '#182530', 'muted': '#657681', 'accent': '#356d78',
-                      'accent_hover': '#2c5962', 'border': '#dce4e9'}
+                      'accent_hover': '#2c5962', 'border': '#dce4e9', 'hover': '#80a3ab'}
         self.ui_colors = colors
         self.style.configure('.', background=colors['background'], foreground=colors['foreground'])
         self.style.configure('TFrame', background=colors['background'])
@@ -285,7 +285,6 @@ class CharacterApp:
             ('Коллекция', 'Просматривай и прокачивай героев', self.show_characters),
             ('Арена', 'Сравни двух бойцов в сражении', self.show_fight),
             ('Турнир', 'Собери ростер и проведи чемпионат', self.show_tournament),
-            ('Опции', 'Тема и параметры окна', self.show_options),
         )
         for title, description, command in entries:
             tile = tk.Frame(menu, bg=colors['surface'], highlightthickness=1,
@@ -309,13 +308,13 @@ class CharacterApp:
                 highlightbackground=colors['border'], highlightthickness=1))
         exit_container = ttk.Frame(frame)
         exit_container.pack(fill='x', pady=(8, 0))
-        exit_icon = tk.Canvas(exit_container, width=44, height=44, highlightthickness=0,
-                              background=colors['surface'], cursor='hand2')
-        exit_icon.pack(side='right', padx=2, pady=2)
-        exit_icon.create_rectangle(6, 5, 22, 39, outline=colors['muted'], width=2)
-        exit_icon.create_line(17, 7, 17, 37, fill=colors['muted'], width=1)
-        exit_icon.create_line(13, 22, 37, 22, fill=colors['muted'], width=3, arrow='last')
-        exit_icon.bind('<Button-1>', lambda _event: self.root.destroy())
+        ttk.Button(exit_container, text='⚙ Настройки', command=self.show_options, width=24).pack(
+            anchor='e', pady=(0, 5)
+        )
+        exit_button = ttk.Button(
+            exit_container, text='⇥ Выйти из игры', command=self.root.destroy, width=24,
+        )
+        exit_button.pack(anchor='e')
 
     def show_options(self):
         self.clear()
@@ -785,9 +784,9 @@ class CharacterApp:
         row = ttk.Frame(frame)
         row.pack(fill='x', pady=(0, 8))
         compact_fight_layout = page_scale < 0.95
-        left = ttk.LabelFrame(row, text='Боец 1', padding=8)
-        center = ttk.LabelFrame(row, text='Арена', padding=8)
-        right = ttk.LabelFrame(row, text='Боец 2', padding=8)
+        left = ttk.LabelFrame(row, text='Боец 1', padding=8, labelanchor='n')
+        center = ttk.LabelFrame(row, text='Арена', padding=8, labelanchor='n')
+        right = ttk.LabelFrame(row, text='Боец 2', padding=8, labelanchor='n')
         if compact_fight_layout:
             center.grid(row=0, column=0, columnspan=2, sticky='ew', pady=(0, 8))
             left.grid(row=1, column=0, sticky='nsew', padx=(0, 4))
@@ -865,8 +864,15 @@ class CharacterApp:
         ):
             outcome.pack_forget()
             panel.configure(style='TLabelframe')
+            card_bg = '#20242a' if self.dark_theme else '#fffaf0'
+            for row in stats_card.winfo_children():
+                row.configure(background=card_bg)
+                if isinstance(row, tk.Frame):
+                    row.configure(highlightbackground=self.ui_colors['border'])
+                    for label in row.winfo_children():
+                        label.configure(background=card_bg)
             stats_card.configure(
-                background='#20242a' if self.dark_theme else '#fffaf0',
+                background=card_bg,
                 highlightbackground='#c69b4b' if self.dark_theme else '#d6bd88',
             )
             portrait.configure(highlightthickness=0)
@@ -926,12 +932,18 @@ class CharacterApp:
             value = properties.get(key, '')
             if not value or value.casefold() == 'none':
                 continue
-            row = tk.Frame(stats_card, bg=card_bg)
-            row.pack(fill='x', padx=5, pady=1)
+            row = tk.Frame(
+                stats_card, bg=card_bg, padx=7, pady=4, highlightthickness=1,
+                highlightbackground=self.ui_colors['border'],
+            )
+            row.pack(fill='x', padx=3, pady=2)
+            row.grid_columnconfigure(1, weight=1)
             tk.Label(row, text=label_text, font=('Segoe UI', 9, 'bold'),
-                     bg=card_bg, fg=muted_fg, anchor='nw').pack(anchor='w')
+                     bg=card_bg, fg=muted_fg, anchor='w').grid(
+                         row=0, column=0, sticky='w', padx=(0, 6))
             tk.Label(row, text=readable(value), font=('Segoe UI', 9), bg=card_bg,
-                     fg=main_fg, justify='left', anchor='nw', wraplength=170).pack(fill='x', anchor='w')
+                     fg=main_fg, justify='right', anchor='e', wraplength=120).grid(
+                         row=0, column=1, sticky='e')
 
         templates = dict(zip((race.casefold() for race in data.race_sum), ('human', 'orc', 'elf')))
         aliases = dict(templates)
@@ -1059,7 +1071,14 @@ class CharacterApp:
         ):
             outcome.pack_forget()
             panel.configure(style='TLabelframe')
-            stats_card.configure(background='#20242a' if self.dark_theme else '#fffaf0')
+            card_bg = '#20242a' if self.dark_theme else '#fffaf0'
+            for row in stats_card.winfo_children():
+                row.configure(background=card_bg)
+                if isinstance(row, tk.Frame):
+                    row.configure(highlightbackground=self.ui_colors['border'])
+                    for label in row.winfo_children():
+                        label.configure(background=card_bg)
+            stats_card.configure(background=card_bg)
             stats_card.configure(highlightbackground='#c69b4b' if self.dark_theme else '#d6bd88')
             portrait.configure(highlightthickness=0)
         self._spin_fight_round()
@@ -1127,13 +1146,15 @@ class CharacterApp:
                 self.style.configure(f'{style_name}.Label', foreground=foreground, background=background)
                 panel.configure(style=style_name)
                 outcome.configure(
-                    text='ПОБЕДИТЕЛЬ' if is_winner else 'ПОРАЖЕНИЕ',
+                    text='ПОБЕДИТЕЛЬ' if is_winner else 'ПРОИГРАВШИЙ',
                     background=background, foreground=foreground,
                 )
                 outcome.pack(fill='x', pady=(4, 0))
                 stats_card.configure(background=background, highlightbackground=color)
                 for row in stats_card.winfo_children():
                     row.configure(background=background)
+                    if isinstance(row, tk.Frame):
+                        row.configure(highlightbackground=color)
                     for label in row.winfo_children():
                         label.configure(background=background)
                 portrait.configure(highlightthickness=3, highlightbackground=color)
@@ -1262,21 +1283,21 @@ class CharacterApp:
                              highlightthickness=1, highlightbackground=self.ui_colors['border'])
         name_card.pack(fill='x', pady=(0, 5))
         self.create_summary_name = tk.Label(
-            name_card, text='\u041d\u043e\u0432\u044b\u0439 \u0433\u0435\u0440\u043e\u0439',
+            name_card, text='Новый герой',
             bg=self.ui_colors['surface'], fg=self.ui_colors['foreground'],
             font=('Segoe UI', 12, 'bold'), wraplength=210, anchor='w', justify='left',
         )
         self.create_summary_name.pack(fill='x')
         for label, key in (
-            ('\u041f\u0440\u043e\u0438\u0441\u0445\u043e\u0436\u0434\u0435\u043d\u0438\u0435', 'substory'),
-            ('\u0420\u0430\u0441\u0430', 'race_line'), ('\u0420\u043e\u0441\u0442', 'size'),
-            ('\u0421\u0438\u043b\u0430', 'strength'), ('\u0421\u043a\u043e\u0440\u043e\u0441\u0442\u044c', 'speed'),
-            ('\u0423\u043c', 'iq'), ('\u0411\u043e\u0435\u0432\u044b\u0435 \u043d\u0430\u0432\u044b\u043a\u0438', 'fighting'),
-            ('\u041e\u0440\u0443\u0436\u0438\u0435', 'weapon'), ('\u0412\u043b\u0430\u0434\u0435\u043d\u0438\u0435', 'weapon_mastery'),
-            ('\u0417\u0430\u0447\u0430\u0440\u043e\u0432\u0430\u043d\u0438\u0435', 'weapon_enchantment'),
-            ('\u0421\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u044c', 'ability'),
-            ('\u041c\u043e\u0449\u044c', 'ability_power'), ('\u0425\u0430\u043e\u0441', 'chaos'),
-            ('\u0422\u0438\u0442\u0443\u043b', 'title'),
+            ('Происхождение', 'substory'),
+            ('Раса', 'race_line'), ('Рост', 'size'),
+            ('Сила', 'strength'), ('Скорость', 'speed'),
+            ('Ум', 'iq'), ('Боевые навыки', 'fighting'),
+            ('Оружие', 'weapon'), ('Владение', 'weapon_mastery'),
+            ('Зачарование', 'weapon_enchantment'),
+            ('Способность', 'ability'),
+            ('Мощь', 'ability_power'), ('Хаос', 'chaos'),
+            ('Титул', 'title'),
         ):
             row = tk.Frame(summary, background=self.ui_colors['surface'], padx=7, pady=4,
                            highlightthickness=1, highlightbackground=self.ui_colors['border'])
@@ -1285,7 +1306,7 @@ class CharacterApp:
             tk.Label(row, text=label, anchor='w', background=self.ui_colors['surface'],
                      foreground=self.ui_colors['muted'], font=('Segoe UI', 9, 'bold')).grid(
                          row=0, column=0, sticky='w', padx=(0, 6))
-            value_label = tk.Label(row, text='\u2014', anchor='e', justify='right',
+            value_label = tk.Label(row, text='—', anchor='e', justify='right',
                                    background=self.ui_colors['surface'], foreground=self.ui_colors['foreground'],
                                    font=('Segoe UI', 9, 'bold'), wraplength=125)
             value_label.grid(row=0, column=1, sticky='e')
@@ -1483,18 +1504,18 @@ class CharacterApp:
             self.wheel_status.configure(text=f'Выпало: {label} - {selected_text}')
             if self.spin_index == 7 and selected != data.weapon_sum[0]:
                 self.wheel_steps[8] = (
-                    '\u0412\u043b\u0430\u0434\u0435\u043d\u0438\u0435 \u043e\u0440\u0443\u0436\u0438\u0435\u043c',
+                    'Владение оружием',
                     data.weapon_mastery_sum, data.weapon_mastery_weights,
                     lambda value: setattr(self.current_hero, 'weapon_mastery', value), str,
                 )
                 self.wheel_steps[9] = (
-                    '\u0417\u0430\u0447\u0430\u0440\u043e\u0432\u0430\u043d\u0438\u0435 \u043e\u0440\u0443\u0436\u0438\u044f',
+                    'Зачарование оружия',
                     data.weapon_enchantment_sum, data.weapon_enchantment_weights,
                     lambda value: setattr(self.current_hero, 'weapon_enchantment', value), str,
                 )
             if self.spin_index == 10 and selected != data.ability_sum[0]:
                 self.wheel_steps[11] = (
-                    '\u041c\u043e\u0449\u044c \u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u0438',
+                    'Мощь способности',
                     data.ability_power_sum, data.ability_power_weights,
                     lambda value: setattr(self.current_hero, 'ability_power', value), str,
                 )
@@ -1586,9 +1607,9 @@ class CharacterApp:
         search = ttk.Entry(controls, textvariable=self.character_search_var)
         search.pack(fill='x', pady=(0, 5))
         search.insert(0, '')
-        self.character_sort_var = tk.StringVar(value='\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u043e\u0432\u044b\u0435')
+        self.character_sort_var = tk.StringVar(value='Сначала новые')
         sort_box = ttk.Combobox(controls, state='readonly', textvariable=self.character_sort_var,
-                                values=('\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u043e\u0432\u044b\u0435', '\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0441\u0442\u0430\u0440\u044b\u0435', '\u041f\u043e \u0438\u043c\u0435\u043d\u0438', '\u041f\u043e \u043e\u0447\u043a\u0430\u043c (\u043f\u043e \u0443\u0431\u044b\u0432\u0430\u043d\u0438\u044e)', '\u041f\u043e \u043e\u0447\u043a\u0430\u043c (\u043f\u043e \u0432\u043e\u0437\u0440\u0430\u0441\u0442\u0430\u043d\u0438\u044e)'), width=28)
+                                values=('Сначала новые', 'Сначала старые', 'По имени', 'По очкам (по убыванию)', 'По очкам (по возрастанию)'), width=28)
         sort_box.pack(fill='x', pady=(0, 5))
         races = ['Все расы'] + [self._readable_creation_value(race) for race in data.race_sum]
         self.character_race_var = tk.StringVar(value=races[0])
@@ -1728,13 +1749,13 @@ class CharacterApp:
                 continue
             filtered.append(path)
         sort_mode = self.character_sort_var.get()
-        if sort_mode == '\u041f\u043e \u0438\u043c\u0435\u043d\u0438':
+        if sort_mode == 'По имени':
             filtered.sort(key=lambda path: path.stem.casefold())
-        elif sort_mode == '\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0441\u0442\u0430\u0440\u044b\u0435':
+        elif sort_mode == 'Сначала старые':
             filtered.sort(key=lambda path: path.stat().st_mtime)
-        elif sort_mode == '\u041f\u043e \u043e\u0447\u043a\u0430\u043c (\u043f\u043e \u0443\u0431\u044b\u0432\u0430\u043d\u0438\u044e)':
+        elif sort_mode == 'По очкам (по убыванию)':
             filtered.sort(key=lambda path: int(properties_by_path[path].get('points', 0) or 0), reverse=True)
-        elif sort_mode == '\u041f\u043e \u043e\u0447\u043a\u0430\u043c (\u043f\u043e \u0432\u043e\u0437\u0440\u0430\u0441\u0442\u0430\u043d\u0438\u044e)':
+        elif sort_mode == 'По очкам (по возрастанию)':
             filtered.sort(key=lambda path: int(properties_by_path[path].get('points', 0) or 0))
         else:
             filtered.sort(key=lambda path: path.stat().st_mtime, reverse=True)
@@ -1765,6 +1786,16 @@ class CharacterApp:
             )
         if not same_selection:
             self.open_selected()
+
+    def _set_gallery_tile_hover(self, path, background_id, hovering):
+        selected = path == self.selected_character_path
+        if selected:
+            outline, width = self.ui_colors['accent'], 2
+        elif hovering:
+            outline, width = self.ui_colors['hover'], 1.5
+        else:
+            outline, width = self.ui_colors['border'], 1
+        self.gallery_canvas.itemconfigure(background_id, outline=outline, width=width)
 
     def _upgrade_character_stat(self, stat):
         path = getattr(self, 'selected_character_path', None)
@@ -1834,7 +1865,7 @@ class CharacterApp:
         canvas_width = max(canvas.winfo_width(), 240)
         if not self.visible_files:
             canvas.create_text(
-                canvas_width / 2, 24, text='\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e',
+                canvas_width / 2, 24, text='Ничего не найдено',
                 fill=self.ui_colors['muted'], font=('Segoe UI', 10), anchor='center',
             )
             canvas.configure(scrollregion=(0, 0, canvas_width, 48))
@@ -1895,9 +1926,20 @@ class CharacterApp:
                 row_items.append((path, tag, background_id))
 
             for path, tag, _background_id in row_items:
+                background_id = self.gallery_tiles[path]
                 canvas.tag_bind(
                     tag, '<Button-1>',
                     lambda _event, selected_path=path: self._select_character(selected_path),
+                )
+                canvas.tag_bind(
+                    tag, '<Enter>',
+                    lambda _event, selected_path=path, item_id=background_id:
+                    self._set_gallery_tile_hover(selected_path, item_id, True),
+                )
+                canvas.tag_bind(
+                    tag, '<Leave>',
+                    lambda _event, selected_path=path, item_id=background_id:
+                    self._set_gallery_tile_hover(selected_path, item_id, False),
                 )
             y += tile_height + gap
 
@@ -2159,16 +2201,16 @@ class CharacterApp:
             upgrade_costs[stat] = weights[next_index] * 4 if next_index >= 0 else None
         self._clear_preview_rows()
         fields = (
-            ('\u0418\u043c\u044f', 'name'), ('\u041e\u0447\u043a\u0438', 'points'),
-            ('\u041f\u0440\u043e\u0438\u0441\u0445\u043e\u0436\u0434\u0435\u043d\u0438\u0435', 'substory'),
-            ('\u0420\u0430\u0441\u0430', 'race'), ('\u041f\u043e\u0434\u0440\u0430\u0441\u0430', 'subrace'),
-            ('\u0420\u043e\u0441\u0442', 'size'), ('\u0421\u0438\u043b\u0430', 'strength'),
-            ('\u0421\u043a\u043e\u0440\u043e\u0441\u0442\u044c', 'speed'), ('\u0418\u043d\u0442\u0435\u043b\u043b\u0435\u043a\u0442', 'iq'),
-            ('\u0411\u043e\u0435\u0432\u044b\u0435 \u043d\u0430\u0432\u044b\u043a\u0438', 'fighting'),
-            ('\u041e\u0440\u0443\u0436\u0438\u0435', 'weapon'), ('\u0412\u043b\u0430\u0434\u0435\u043d\u0438\u0435 \u043e\u0440\u0443\u0436\u0438\u0435\u043c', 'weapon_mastery'),
-            ('\u0417\u0430\u0447\u0430\u0440\u043e\u0432\u0430\u043d\u0438\u0435 \u043e\u0440\u0443\u0436\u0438\u044f', 'weapon_enchantment'),
-            ('\u0421\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u044c', 'ability'), ('\u041c\u043e\u0449\u044c \u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u0438', 'ability_power'),
-            ('\u0425\u0430\u043e\u0441', 'chaos'), ('\u0422\u0438\u0442\u0443\u043b', 'title'),
+            ('Имя', 'name'), ('Очки', 'points'),
+            ('Происхождение', 'substory'),
+            ('Раса', 'race'), ('Подраса', 'subrace'),
+            ('Рост', 'size'), ('Сила', 'strength'),
+            ('Скорость', 'speed'), ('Интеллект', 'iq'),
+            ('Боевые навыки', 'fighting'),
+            ('Оружие', 'weapon'), ('Владение оружием', 'weapon_mastery'),
+            ('Зачарование оружия', 'weapon_enchantment'),
+            ('Способность', 'ability'), ('Мощь способности', 'ability_power'),
+            ('Хаос', 'chaos'), ('Титул', 'title'),
         )
         canvas_width = max(300, self.detail.winfo_width())
         left, right, gap = 6, canvas_width - 6, 6
