@@ -21,6 +21,7 @@ BACKGROUND_TRACKS = {
 SOUND_EFFECTS = {
     'button_click': 'effects/ui/button_click.wav',
     'error': 'effects/ui/error.wav',
+    'wheel_tick': 'effects/ui/wheel_tick.wav',
     'round_win': 'effects/outcomes/round_win.wav',
     'round_loss': 'effects/outcomes/round_loss.wav',
     'arena_battle_win': 'effects/outcomes/arena_battle_win.wav',
@@ -31,6 +32,7 @@ SOUND_EFFECTS = {
     'ladder_run_loss': 'effects/outcomes/ladder_run_loss.wav',
     'character_created': 'effects/outcomes/character_created.wav',
     'stat_upgrade': 'effects/outcomes/stat_upgrade.wav',
+    'wheel_stop': 'effects/outcomes/wheel_stop.wav',
     'tournament_complete': 'effects/outcomes/tournament_complete.wav',
     'combat_start': 'effects/transitions/combat_start.wav',
     'tournament_start': 'effects/transitions/tournament_start.wav',

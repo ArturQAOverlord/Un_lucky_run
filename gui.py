@@ -2347,6 +2347,7 @@ class CharacterApp:
         total_frames = 95 if self.fast_spin_var.get() else 333
         self.spin_frame = 0
         self._draw_wheel(wheel_options, start_rotation, weights)
+        last_pointer_index = self._wheel_index_at_pointer(weights, start_rotation)
 
         finished = False
 
@@ -2370,6 +2371,7 @@ class CharacterApp:
             self._update_creation_summary()
             self.wheel_rotation = desired_rotation
             self.wheel_status.configure(text=f'Выпало: {label} - {selected_text}')
+            self.audio.play_effect('wheel_stop')
             if self.spin_index == 7 and selected != data.weapon_sum[0]:
                 self.wheel_steps[8] = (
                     'Владение оружием',
@@ -2396,6 +2398,7 @@ class CharacterApp:
         self.current_spin_finish = finish_spin
 
         def animate():
+            nonlocal last_pointer_index
             self.spin_after_id = None
             self.spin_frame += 1
             progress = min(self.spin_frame / total_frames, 1.0)
@@ -2403,6 +2406,9 @@ class CharacterApp:
             rotation = start_rotation + rotation_delta * eased
             self._draw_wheel(wheel_options, rotation, weights)
             pointer_index = self._wheel_index_at_pointer(weights, rotation)
+            if pointer_index != last_pointer_index and progress < 1.0:
+                self.audio.play_effect('wheel_tick')
+            last_pointer_index = pointer_index
             self.wheel_selection.configure(text=f'{label}: {wheel_options[pointer_index]}')
             self.wheel_status.configure(text=f'{label}: {int(progress * 100)}%')
             if progress < 1.0:

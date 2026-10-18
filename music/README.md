@@ -15,7 +15,8 @@ music/
 └── effects/
     ├── ui/
     │   ├── button_click.wav
-    │   └── error.wav
+    │   ├── error.wav
+    │   └── wheel_tick.wav
     ├── outcomes/
     │   ├── round_win.wav
     │   ├── round_loss.wav
@@ -27,6 +28,7 @@ music/
     │   ├── ladder_run_loss.wav
     │   ├── character_created.wav
     │   ├── stat_upgrade.wav
+    │   ├── wheel_stop.wav
     │   └── tournament_complete.wav
     └── transitions/
         ├── combat_start.wav
@@ -48,3 +50,7 @@ ready to play and easy to replace later.
 The error cue plays for error dialogs, not ordinary validation warnings. Arena
 result cues describe the first fighter's result. A final ladder result uses its
 run-level cue; intermediate wins use the ladder battle cue.
+
+The character creation wheel plays `wheel_tick.wav` as its pointer crosses
+segments and `wheel_stop.wav` when a value is selected, including when a spin
+is skipped.

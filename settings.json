@@ -1,7 +1,7 @@
 {
   "dark_theme": true,
-  "fullscreen": false,
+  "fullscreen": true,
   "window_resolution": null,
   "sound_enabled": true,
-  "sound_volume": 0.9264705882352942
+  "sound_volume": 0.5
 }
