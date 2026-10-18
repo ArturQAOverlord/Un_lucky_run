@@ -16,6 +16,31 @@ def load_character(path):
     return character
 
 
+def change_points(path, delta, minimum=0):
+    """Update and persist a character's points without changing other fields."""
+    path = Path(path)
+    lines = path.read_text(encoding='utf-8').splitlines()
+    points_index = None
+    current = 0
+    for index, line in enumerate(lines):
+        key, separator, value = line.partition(':')
+        if separator and key.strip() == 'points':
+            points_index = index
+            try:
+                current = int(value.strip())
+            except ValueError:
+                current = 0
+            break
+
+    updated = max(minimum, current + delta)
+    if points_index is None:
+        lines.append(f'points: {updated}')
+    else:
+        lines[points_index] = f'{lines[points_index].partition(":")[0]}: {updated}'
+    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    return updated
+
+
 def _rank(pool, value):
     try:
         return len(pool) - pool.index(value)
@@ -96,12 +121,21 @@ def fight_match(first_path, second_path):
     else:
         winner = first_name if first_total > second_total else second_name
         report.extend(['', f'Победитель: {winner}!'])
+    if winner == first_name:
+        first_points = change_points(first_path, 5)
+        second_points = change_points(second_path, -4)
+    else:
+        first_points = change_points(first_path, -4)
+        second_points = change_points(second_path, 5)
+    report.extend(['', f'Очки: {first_name} — {first_points}, {second_name} — {second_points}.'])
     return {
         'report': '\n'.join(report),
         'comparisons': comparisons,
         'winner': winner,
         'first_name': first_name,
         'second_name': second_name,
+        'first_points_total': first_points,
+        'second_points_total': second_points,
     }
 
 

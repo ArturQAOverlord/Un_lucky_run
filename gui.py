@@ -124,6 +124,11 @@ class CharacterApp:
         self.style.configure('Metric.TLabel', font=('Segoe UI', 20, 'bold'),
                              foreground=colors['accent'])
         self.style.configure('Muted.TLabel', background=colors['surface'], foreground=colors['muted'])
+        self.style.configure('CreationSummary.TFrame', background=colors['surface'])
+        self.style.configure('CreationSummary.Muted.TLabel', background=colors['surface'],
+                             foreground=colors['muted'])
+        self.style.configure('CreationSummary.Value.TLabel', background=colors['surface'],
+                             foreground=colors['foreground'])
         self.style.configure('Creation.Horizontal.TProgressbar', troughcolor=colors['input'],
                              background=colors['accent'], bordercolor=colors['border'], thickness=10)
         self.style.configure('Primary.TButton', background=colors['accent'],
@@ -398,6 +403,7 @@ class CharacterApp:
         controls.pack(side='left', fill='y', padx=12)
         ttk.Button(controls, text='Добавить →', command=self.add_to_roster).pack(pady=(32, 6))
         ttk.Button(controls, text='← Убрать', command=self.remove_from_roster).pack(pady=6)
+        ttk.Button(controls, text='Очистить ростер', command=self.clear_roster).pack(pady=(12, 6))
 
         self.roster_table = ttk.Treeview(roster_frame, columns=('name',), show='headings', height=table_height, selectmode='browse')
         self.roster_table.heading('name', text='Ростер (0/20)')
@@ -435,6 +441,8 @@ class CharacterApp:
                                  show='headings', height=5)
             table.tag_configure('leader', background='#d9f2df' if not self.dark_theme else '#214a36',
                                 foreground='#176b35' if not self.dark_theme else '#a8efbd')
+            table.tag_configure('eliminated', background='#f7dddd' if not self.dark_theme else '#512b32',
+                                foreground='#9e2727' if not self.dark_theme else '#ffadb6')
             for column, title, width, anchor in (
                 ('rank', '№', 32, 'center'), ('name', 'Персонаж', 145, 'w'),
                 ('wins', 'Победы', 62, 'center'), ('score', 'Очки', 72, 'center'),
@@ -704,7 +712,7 @@ class CharacterApp:
             table = self.group_tables[group['name']]
             table.delete(*table.get_children())
             for player in group['standings']:
-                tags = ('leader',) if player['rank'] == 1 else ()
+                tags = ('leader',) if player['rank'] <= 2 else ('eliminated',)
                 table.insert('', 'end', tags=tags, values=(
                     player['rank'], player['name'], player['wins'],
                     f"{player['for']}:{player['against']}",
@@ -715,6 +723,11 @@ class CharacterApp:
         if not selection:
             return
         self.roster_table.delete(selection[0])
+        self.update_roster_count()
+
+    def clear_roster(self):
+        for item_id in self.roster_table.get_children():
+            self.roster_table.delete(item_id)
         self.update_roster_count()
 
     def update_roster_count(self):
@@ -825,9 +838,8 @@ class CharacterApp:
         self._draw_fight_wheel(names[0], names[1], 0)
         self.fight_button = ttk.Button(center, text='Начать сражение',
                                        command=self.start_fight, style='Primary.TButton')
-        self.fight_button.pack()
-        history_frame = ttk.LabelFrame(frame, text='История раундов', padding=6)
-        history_frame.pack(fill='x', pady=(8, 0))
+        history_frame = ttk.LabelFrame(center, text='История раундов', padding=6)
+        history_frame.pack(fill='x', pady=(0, 6))
         self.fight_history = ttk.Treeview(
             history_frame, columns=('round', 'attribute', 'score', 'winner'),
             show='headings', height=max(2, min(3, int(4 * page_scale))), selectmode='none',
@@ -840,6 +852,7 @@ class CharacterApp:
             self.fight_history.column(column, width=width, minwidth=60, anchor='center',
                                       stretch=column in ('attribute', 'winner'))
         self.fight_history.pack(fill='x')
+        self.fight_button.pack()
         self.fight_history.tag_configure('first-wins', foreground='#25834b' if not self.dark_theme else '#91e2ac')
         self.fight_history.tag_configure('second-wins', foreground='#c34747' if not self.dark_theme else '#ffaaaa')
         self._draw_fight_portrait(0)
@@ -901,6 +914,7 @@ class CharacterApp:
                  font=('Segoe UI', 10, 'bold'), bg=card_bg, fg=muted_fg,
                  anchor='center').pack(fill='x', padx=4, pady=(5, 3))
         stat_fields = (
+            ('Очки', 'points'),
             ('Раса', 'race'), ('Подраса', 'subrace'),
             ('Рост', 'size'), ('Сила', 'strength'),
             ('Скорость', 'speed'),
@@ -1087,6 +1101,8 @@ class CharacterApp:
 
     def _spin_fight_round(self):
         if self.fight_round_index >= len(self.fight_rounds):
+            self._draw_fight_portrait(self.first_fighter.current())
+            self._draw_fight_portrait(self.second_fighter.current())
             last_comparison = self.fight_rounds[-1]
             self._draw_fight_wheel(
                 *self.fight_names,
@@ -1238,14 +1254,15 @@ class CharacterApp:
             command=self._skip_current_spin, state='disabled', style='Skip.TButton',
         )
         self.skip_spin_button.pack(pady=(5, 0))
-        summary = ttk.LabelFrame(content, text='Карточка героя', padding=14)
+        summary = ttk.LabelFrame(content, text='Карточка героя', padding=10)
         summary.pack(side='right', fill='y', padx=(0, 2))
         summary.configure(width=220)
         summary.pack_propagate(False)
         self.create_summary_rows = {}
         self.create_summary_name = ttk.Label(summary, text='Новый герой',
-                                              font=('Segoe UI', 13, 'bold'), wraplength=180)
-        self.create_summary_name.pack(anchor='w', pady=(0, 12))
+                                              style='CreationSummary.Value.TLabel',
+                                              font=('Segoe UI', 12, 'bold'), wraplength=180)
+        self.create_summary_name.pack(anchor='w', pady=(0, 5))
         for label, key in (
             ('Происхождение', 'substory'),
             ('Раса', 'race_line'), ('Рост', 'size'),
@@ -1257,16 +1274,16 @@ class CharacterApp:
             ('Мощь', 'ability_power'), ('Хаос', 'chaos'),
             ('Титул', 'title'),
         ):
-            row = ttk.Frame(summary)
-            row.pack(fill='x', pady=3)
-            ttk.Label(row, text=label, style='Muted.TLabel', wraplength=180).pack(anchor='w')
-            value_label = ttk.Label(row, text='—', wraplength=180, font=('Segoe UI', 9, 'bold'))
-            value_label.pack(anchor='w', pady=(0, 3))
+            row = ttk.Frame(summary, style='CreationSummary.TFrame')
+            row.pack(fill='x', pady=1)
+            ttk.Label(row, text=label, style='CreationSummary.Muted.TLabel',
+                      font=('Segoe UI', 8)).pack(anchor='w')
+            value_label = ttk.Label(row, text='\u2014', style='CreationSummary.Value.TLabel',
+                                    wraplength=180, justify='left', anchor='nw',
+                                    font=('Segoe UI', 9, 'bold'))
+            value_label.pack(anchor='w', pady=(0, 1))
             self.create_summary_rows[key] = value_label
 
-        self.result = tk.Text(frame, wrap='word', state='disabled', font=('Segoe UI', 9), height=4,
-                              relief='flat', padx=10, pady=8)
-        self.result.pack(fill='x', expand=False, pady=(10, 0))
         self.name_entry.focus_set()
 
     @staticmethod
@@ -1304,7 +1321,7 @@ class CharacterApp:
         if completed >= total:
             text = 'Генерация завершена'
         else:
-            current_step = self._readable_creation_value(self.wheel_steps[completed][0])
+            current_step = self._readable_creation_value(self.wheel_steps[self.spin_index][0])
             text = f'Шаг {completed + 1} из {total}  ·  {current_step}'
         self.create_progress_label.configure(text=text)
 
@@ -1335,7 +1352,10 @@ class CharacterApp:
             simple_step('Интеллект', 'iq', data.iq_sum, data.iq_weights),
             simple_step('Боевые навыки', 'fighting', data.fighting_sum, data.fighting_weights),
             simple_step('Оружие', 'weapon', data.weapon_sum, data.weapon_weights),
+            None,
+            None,
             simple_step('Способность', 'ability', data.ability_sum, data.ability_weights),
+            None,
         ]
         chaos_options = [None] + data.chaos_sum
         no_chaos_weight = sum(data.chaos_weights) * 7 / 3
@@ -1398,8 +1418,11 @@ class CharacterApp:
         return len(weights) - 1
 
     def _spin_next(self):
+        while self.spin_index < len(self.wheel_steps) and self.wheel_steps[self.spin_index] is None:
+            self.spin_index += 1
         self._update_creation_progress()
         if self.spin_index >= len(self.wheel_steps):
+            self._update_creation_summary()
             try:
                 main.file_creation(self.current_hero)
             except OSError as error:
@@ -1452,27 +1475,26 @@ class CharacterApp:
             self._update_creation_summary()
             self.wheel_rotation = desired_rotation
             self.wheel_status.configure(text=f'Выпало: {label} - {selected_text}')
-            self.result.configure(state='normal')
-            self.result.insert('end', f'{label}: {selected_text}\n')
-            self.result.see('end')
-            self.result.configure(state='disabled')
-
-            next_steps = []
-            if label == 'Оружие' and selected != data.weapon_sum[0]:
-                next_steps.extend([
-                    ('Владение оружием', data.weapon_mastery_sum, data.weapon_mastery_weights,
-                     lambda value: setattr(self.current_hero, 'weapon_mastery', value), str),
-                    ('Зачарование оружия', data.weapon_enchantment_sum, data.weapon_enchantment_weights,
-                     lambda value: setattr(self.current_hero, 'weapon_enchantment', value), str),
-                ])
-            if label == 'Способность' and selected != data.ability_sum[0]:
-                next_steps.append((
-                    'Мощь способности', data.ability_power_sum, data.ability_power_weights,
+            if self.spin_index == 7 and selected != data.weapon_sum[0]:
+                self.wheel_steps[8] = (
+                    '\u0412\u043b\u0430\u0434\u0435\u043d\u0438\u0435 \u043e\u0440\u0443\u0436\u0438\u0435\u043c',
+                    data.weapon_mastery_sum, data.weapon_mastery_weights,
+                    lambda value: setattr(self.current_hero, 'weapon_mastery', value), str,
+                )
+                self.wheel_steps[9] = (
+                    '\u0417\u0430\u0447\u0430\u0440\u043e\u0432\u0430\u043d\u0438\u0435 \u043e\u0440\u0443\u0436\u0438\u044f',
+                    data.weapon_enchantment_sum, data.weapon_enchantment_weights,
+                    lambda value: setattr(self.current_hero, 'weapon_enchantment', value), str,
+                )
+            if self.spin_index == 10 and selected != data.ability_sum[0]:
+                self.wheel_steps[11] = (
+                    '\u041c\u043e\u0449\u044c \u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u0438',
+                    data.ability_power_sum, data.ability_power_weights,
                     lambda value: setattr(self.current_hero, 'ability_power', value), str,
-                ))
-            if next_steps:
-                self.wheel_steps[self.spin_index + 1:self.spin_index + 1] = next_steps
+                )
             self.spin_index += 1
+            while self.spin_index < len(self.wheel_steps) and self.wheel_steps[self.spin_index] is None:
+                self.spin_index += 1
             self._update_creation_progress()
             self.spin_after_id = self.root.after(700, self._spin_next)
 
@@ -1538,7 +1560,6 @@ class CharacterApp:
         self._update_creation_summary()
         self._update_creation_progress()
         self.generate_button.configure(state='disabled')
-        self.set_text(self.result, '')
         self._spin_next()
 
     def show_characters(self):
@@ -1559,9 +1580,9 @@ class CharacterApp:
         search = ttk.Entry(controls, textvariable=self.character_search_var)
         search.pack(fill='x', pady=(0, 5))
         search.insert(0, '')
-        self.character_sort_var = tk.StringVar(value='Сначала новые')
+        self.character_sort_var = tk.StringVar(value='\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u043e\u0432\u044b\u0435')
         sort_box = ttk.Combobox(controls, state='readonly', textvariable=self.character_sort_var,
-                                values=('Сначала новые', 'По имени'), width=22)
+                                values=('\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u043d\u043e\u0432\u044b\u0435', '\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0441\u0442\u0430\u0440\u044b\u0435', '\u041f\u043e \u0438\u043c\u0435\u043d\u0438', '\u041f\u043e \u043e\u0447\u043a\u0430\u043c (\u043f\u043e \u0443\u0431\u044b\u0432\u0430\u043d\u0438\u044e)', '\u041f\u043e \u043e\u0447\u043a\u0430\u043c (\u043f\u043e \u0432\u043e\u0437\u0440\u0430\u0441\u0442\u0430\u043d\u0438\u044e)'), width=28)
         sort_box.pack(fill='x', pady=(0, 5))
         races = ['Все расы'] + [self._readable_creation_value(race) for race in data.race_sum]
         self.character_race_var = tk.StringVar(value=races[0])
@@ -1580,26 +1601,23 @@ class CharacterApp:
         self.gallery_canvas.configure(yscrollcommand=gallery_scroll.set)
         self.gallery_canvas.pack(side='left', fill='both', expand=True)
         gallery_scroll.pack(side='right', fill='y')
-        self.gallery_grid = ttk.Frame(self.gallery_canvas)
-        self.gallery_window = self.gallery_canvas.create_window((0, 0), window=self.gallery_grid, anchor='nw')
-        self.gallery_grid.bind('<Configure>', lambda _event: self.gallery_canvas.configure(
-            scrollregion=self.gallery_canvas.bbox('all')))
-        for widget in (self.gallery_canvas, self.gallery_grid, gallery_area):
+        for widget in (self.gallery_canvas, gallery_area):
             widget.bind('<MouseWheel>', self._scroll_character_gallery)
             widget.bind('<Button-4>', self._scroll_character_gallery)
             widget.bind('<Button-5>', self._scroll_character_gallery)
-        self.gallery_canvas.bind('<Configure>', lambda event: self.gallery_canvas.itemconfigure(
-            self.gallery_window, width=event.width))
+        self.gallery_canvas.bind('<Configure>', self._resize_character_gallery_content)
 
         preview = ttk.LabelFrame(body, text='Предпросмотр', padding=10)
         preview.pack(side='right', fill='y', padx=(14, 0))
-        self.card_canvas = tk.Canvas(preview, width=280, height=420,
+        self.card_canvas = tk.Canvas(preview, width=300, height=450,
                                      highlightthickness=0, background=colors['surface'])
         self.card_canvas.pack(pady=(0, 6))
         detail_frame = ttk.Frame(preview)
         detail_frame.pack(fill='both', expand=True)
         self.detail = tk.Text(detail_frame, wrap='word', state='disabled',
-                              font=('Segoe UI', 9), height=5, relief='flat', padx=8, pady=6)
+                              font=('Segoe UI', 10), height=9, relief='flat', padx=8, pady=6,
+                              background=colors['input'], foreground=colors['foreground'],
+                              insertbackground=colors['foreground'])
         detail_scroll = ttk.Scrollbar(detail_frame, orient='vertical', command=self.detail.yview)
         self.detail.configure(yscrollcommand=detail_scroll.set)
         self.detail.pack(side='left', fill='both', expand=True)
@@ -1630,17 +1648,70 @@ class CharacterApp:
                 properties[key.strip()] = value.strip()
         return properties
 
+    def _draw_gallery_race_icon(self, canvas, x, y, race_value, tag):
+        """Draw a compact, theme-friendly race marker for a collection tile."""
+        race = self._readable_creation_value(race_value).casefold()
+        templates = dict(zip((name.casefold() for name in data.race_sum), ('human', 'orc', 'elf')))
+        for name, template in zip(data.race_sum, ('human', 'orc', 'elf')):
+            try:
+                templates[name.encode('utf-8').decode('cp1251').casefold()] = template
+            except (UnicodeEncodeError, UnicodeDecodeError):
+                pass
+        kind = templates.get(race, 'human')
+        palettes = {
+            'human': ('#e8c9a6', '#684b39', '#bd8c65'),
+            'orc': ('#9dbc88', '#3b5942', '#76976a'),
+            'elf': ('#e3cba8', '#75628e', '#ad91c8'),
+        }
+        skin, hair, accent = palettes[kind]
+        canvas.create_oval(x + 2, y + 2, x + 34, y + 34, fill=self.ui_colors['surface'],
+                           outline=self.ui_colors['border'], width=1, tags=(tag,))
+        if kind == 'elf':
+            canvas.create_polygon(x + 7, y + 17, x + 1, y + 11, x + 8, y + 12,
+                                  fill=skin, outline=hair, tags=(tag,))
+            canvas.create_polygon(x + 29, y + 17, x + 35, y + 11, x + 28, y + 12,
+                                  fill=skin, outline=hair, tags=(tag,))
+        elif kind == 'orc':
+            canvas.create_polygon(x + 7, y + 17, x + 1, y + 14, x + 7, y + 12,
+                                  fill=skin, outline=hair, tags=(tag,))
+            canvas.create_polygon(x + 29, y + 17, x + 35, y + 14, x + 29, y + 12,
+                                  fill=skin, outline=hair, tags=(tag,))
+        else:
+            canvas.create_oval(x + 5, y + 15, x + 11, y + 23, fill=skin, outline=hair, tags=(tag,))
+            canvas.create_oval(x + 25, y + 15, x + 31, y + 23, fill=skin, outline=hair, tags=(tag,))
+        canvas.create_oval(x + 8, y + 8, x + 28, y + 29, fill=skin,
+                           outline=hair, width=1, tags=(tag,))
+        canvas.create_arc(x + 7, y + 5, x + 29, y + 24, start=0, extent=180,
+                          style='pieslice', fill=hair, outline=hair, tags=(tag,))
+        canvas.create_oval(x + 13, y + 17, x + 15, y + 19,
+                           fill='#263448', outline='', tags=(tag,))
+        canvas.create_oval(x + 21, y + 17, x + 23, y + 19,
+                           fill='#263448', outline='', tags=(tag,))
+        canvas.create_line(x + 15, y + 24, x + 21, y + 24,
+                           fill=hair, width=1, tags=(tag,))
+        if kind == 'orc':
+            canvas.create_polygon(x + 13, y + 24, x + 15, y + 24, x + 14, y + 28,
+                                  fill='#f3ead7', outline='', tags=(tag,))
+            canvas.create_polygon(x + 21, y + 24, x + 23, y + 24, x + 22, y + 28,
+                                  fill='#f3ead7', outline='', tags=(tag,))
+        elif kind == 'elf':
+            canvas.create_line(x + 11, y + 10, x + 6, y + 18,
+                               fill=accent, width=2, tags=(tag,))
+            canvas.create_line(x + 25, y + 10, x + 30, y + 18,
+                               fill=accent, width=2, tags=(tag,))
+
     def _refresh_character_gallery(self, select_first=False):
-        if not hasattr(self, 'gallery_grid') or not self.gallery_grid.winfo_exists():
+        if not hasattr(self, 'gallery_canvas') or not self.gallery_canvas.winfo_exists():
             return
-        for child in self.gallery_grid.winfo_children():
-            child.destroy()
+        self.gallery_canvas.delete('all')
         query = self.character_search_var.get().strip().casefold()
         selected_race = self.character_race_var.get()
         all_races = 'Все расы'
         filtered = []
+        properties_by_path = {}
         for path in self.files:
             props = self._read_character_properties(path)
+            properties_by_path[path] = props
             race = self._readable_creation_value(props.get('race', ''))
             haystack = ' '.join((path.stem, *(self._readable_creation_value(value) for value in props.values()))).casefold()
             if query and query not in haystack:
@@ -1648,42 +1719,23 @@ class CharacterApp:
             if selected_race != all_races and race.casefold() != selected_race.casefold():
                 continue
             filtered.append(path)
-        if self.character_sort_var.get() == 'По имени':
+        sort_mode = self.character_sort_var.get()
+        if sort_mode == '\u041f\u043e \u0438\u043c\u0435\u043d\u0438':
             filtered.sort(key=lambda path: path.stem.casefold())
+        elif sort_mode == '\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0441\u0442\u0430\u0440\u044b\u0435':
+            filtered.sort(key=lambda path: path.stat().st_mtime)
+        elif sort_mode == '\u041f\u043e \u043e\u0447\u043a\u0430\u043c (\u043f\u043e \u0443\u0431\u044b\u0432\u0430\u043d\u0438\u044e)':
+            filtered.sort(key=lambda path: int(properties_by_path[path].get('points', 0) or 0), reverse=True)
+        elif sort_mode == '\u041f\u043e \u043e\u0447\u043a\u0430\u043c (\u043f\u043e \u0432\u043e\u0437\u0440\u0430\u0441\u0442\u0430\u043d\u0438\u044e)':
+            filtered.sort(key=lambda path: int(properties_by_path[path].get('points', 0) or 0))
+        else:
+            filtered.sort(key=lambda path: path.stat().st_mtime, reverse=True)
         self.visible_files = filtered
         self.gallery_count.configure(text=f'{len(filtered)} / {len(self.files)}')
+        self.gallery_properties = properties_by_path
         self.gallery_tiles = {}
-        for index, path in enumerate(filtered):
-            props = self._read_character_properties(path)
-            race = self._readable_creation_value(' '.join(filter(None, (props.get('subrace', ''), props.get('race', '')))))
-            size = self._readable_creation_value(props.get('size', ''))
-            tile = tk.Frame(self.gallery_grid, bg=self.ui_colors['input'], highlightthickness=1,
-                            highlightbackground=self.ui_colors['border'], padx=8, pady=8, cursor='hand2')
-            tile.configure(takefocus=True)
-            tile.grid(row=index // 2, column=index % 2, sticky='nsew', padx=4, pady=4)
-            self.gallery_grid.columnconfigure(index % 2, weight=1)
-            tk.Frame(tile, bg=self.ui_colors['accent'], height=3).pack(fill='x', pady=(0, 6))
-            tk.Label(tile, text=path.stem, bg=self.ui_colors['input'], fg=self.ui_colors['foreground'],
-                     font=('Segoe UI', 9, 'bold'), anchor='w', wraplength=135, justify='left').pack(fill='x')
-            tk.Label(tile, text='\n'.join(value for value in (race, size) if value),
-                     bg=self.ui_colors['input'], fg=self.ui_colors['muted'],
-                     font=('Segoe UI', 8), anchor='w', wraplength=135, justify='left').pack(fill='x', pady=(4, 0))
-            self.gallery_tiles[path] = tile
-            for widget in (tile, *tile.winfo_children()):
-                widget.bind('<Button-1>', lambda _event, selected=path: self._select_character(selected))
-                widget.bind('<Return>', lambda _event, selected=path: self._select_character(selected))
-                widget.bind('<space>', lambda _event, selected=path: self._select_character(selected))
-                widget.bind('<MouseWheel>', self._scroll_character_gallery)
-                widget.bind('<Button-4>', self._scroll_character_gallery)
-                widget.bind('<Button-5>', self._scroll_character_gallery)
-            tile.bind('<FocusIn>', lambda _event, card=tile: card.configure(
-                highlightbackground=self.ui_colors['accent'], highlightthickness=3))
-            tile.bind('<FocusOut>', lambda _event, card=tile, selected=path: card.configure(
-                highlightbackground=self.ui_colors['accent'] if selected == self.selected_character_path
-                else self.ui_colors['border'], highlightthickness=1))
+        self._render_character_gallery()
         if not filtered:
-            ttk.Label(self.gallery_grid, text='Никого не нашлось',
-                      style='Muted.TLabel').grid(row=0, column=0, columnspan=2, padx=10, pady=20)
             self.selected_character_path = None
             self._draw_character_card({})
             self.set_text(self.detail, '')
@@ -1695,21 +1747,112 @@ class CharacterApp:
 
     def _select_character(self, path):
         self.selected_character_path = path
-        for tile_path, tile in self.gallery_tiles.items():
+        for tile_path, background_id in self.gallery_tiles.items():
             selected = tile_path == path
-            tile.configure(highlightbackground=self.ui_colors['accent'] if selected else self.ui_colors['border'],
-                           highlightthickness=1)
+            self.gallery_canvas.itemconfigure(
+                background_id,
+                outline=self.ui_colors['accent'] if selected else self.ui_colors['border'],
+                width=2 if selected else 1,
+            )
         self.open_selected()
 
     def _scroll_character_gallery(self, event):
-        if event.num == 4:
+        event_number = getattr(event, 'num', None)
+        if event_number == 4:
             direction = -1
-        elif event.num == 5:
+        elif event_number == 5:
             direction = 1
         else:
-            direction = -1 if event.delta > 0 else 1
+            direction = -1 if getattr(event, 'delta', 0) > 0 else 1
         self.gallery_canvas.yview_scroll(direction * 3, 'units')
         return 'break'
+
+    def _resize_character_gallery_content(self, _event=None):
+        if not getattr(self, '_gallery_render_pending', False):
+            self._gallery_render_pending = True
+            self.gallery_canvas.after_idle(self._render_character_gallery)
+
+    def _render_character_gallery(self):
+        self._gallery_render_pending = False
+        if not self.gallery_canvas.winfo_exists():
+            return
+        canvas = self.gallery_canvas
+        old_top = canvas.yview()[0] if canvas.yview() else 0
+        canvas.delete('all')
+        self.gallery_tiles = {}
+        canvas_width = max(canvas.winfo_width(), 240)
+        if not self.visible_files:
+            canvas.create_text(
+                canvas_width / 2, 24, text='\u041d\u0438\u0447\u0435\u0433\u043e \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u043e',
+                fill=self.ui_colors['muted'], font=('Segoe UI', 10), anchor='center',
+            )
+            canvas.configure(scrollregion=(0, 0, canvas_width, 48))
+            return
+
+        margin, gap, columns = 6, 8, 2
+        tile_width = max(90, (canvas_width - 2 * margin - gap) // columns)
+        tile_height = 116
+        y = margin
+        for row_start in range(0, len(self.visible_files), columns):
+            row_items = []
+            for column in range(columns):
+                index = row_start + column
+                if index >= len(self.visible_files):
+                    break
+                path = self.visible_files[index]
+                props = self.gallery_properties[path]
+                x = margin + column * (tile_width + gap)
+                tag = f'gallery_tile_{index}'
+                selected = path == self.selected_character_path
+                background_id = canvas.create_rectangle(
+                    x, y, x + tile_width, y + tile_height,
+                    fill=self.ui_colors['input'],
+                    outline=self.ui_colors['accent'] if selected else self.ui_colors['border'],
+                    width=2 if selected else 1, tags=(tag,),
+                )
+                self.gallery_tiles[path] = background_id
+                self._draw_gallery_race_icon(canvas, x + 10, y + 8, props.get('race', ''), tag)
+                canvas.create_text(
+                    x + 54, y + 9, text=path.stem, anchor='nw',
+                    width=max(40, tile_width - 64),
+                    fill=self.ui_colors['foreground'], font=('Segoe UI', 9, 'bold'), tags=(tag,),
+                )
+                race = self._readable_creation_value(' '.join(filter(None, (
+                    props.get('subrace', ''), props.get('race', ''),
+                ))))
+                size = self._readable_creation_value(props.get('size', ''))
+                canvas.create_text(
+                    x + 10, y + 52,
+                    text='\n'.join(value for value in (race, size) if value), anchor='nw',
+                    width=max(50, tile_width - 20), fill=self.ui_colors['muted'],
+                    font=('Segoe UI', 8), tags=(tag,),
+                )
+                points = props.get('points', '0').strip() or '0'
+                badge_width = min(92, tile_width - 16)
+                badge_left = x + tile_width - badge_width - 8
+                badge_top = y + tile_height - 27
+                canvas.create_rectangle(
+                    badge_left, badge_top, x + tile_width - 8, y + tile_height - 7,
+                    fill=self.ui_colors['surface'], outline=self.ui_colors['accent'],
+                    width=1, tags=(tag,),
+                )
+                canvas.create_text(
+                    (badge_left + x + tile_width - 8) / 2, badge_top + 10,
+                    text=f'Очки: {points}', fill=self.ui_colors['foreground'],
+                    font=('Segoe UI', 8, 'bold'), tags=(tag,),
+                )
+                row_items.append((path, tag, background_id))
+
+            for path, tag, _background_id in row_items:
+                canvas.tag_bind(
+                    tag, '<Button-1>',
+                    lambda _event, selected_path=path: self._select_character(selected_path),
+                )
+            y += tile_height + gap
+
+        canvas.configure(scrollregion=(0, 0, canvas_width, y))
+        if old_top:
+            canvas.yview_moveto(old_top)
 
     def _draw_character_card(self, properties):
         canvas = self.card_canvas
@@ -1928,13 +2071,32 @@ class CharacterApp:
         path = getattr(self, 'selected_character_path', None)
         if path is None:
             return
-        try:
-            content = path.read_text(encoding='utf-8')
-        except OSError as error:
-            messagebox.showerror('Ошибка чтения', str(error))
-            return
-        self.set_text(self.detail, content)
-        self._draw_character_card(self._read_character_properties(path))
+        properties = self._read_character_properties(path)
+        self.detail.configure(state='normal')
+        self.detail.delete('1.0', 'end')
+        self.detail.tag_configure('field', foreground=self.ui_colors['muted'], font=('Segoe UI', 9, 'bold'))
+        self.detail.tag_configure('value', foreground=self.ui_colors['foreground'], font=('Segoe UI', 11))
+        fields = (
+            ('\u0418\u043c\u044f', 'name'), ('\u041e\u0447\u043a\u0438', 'points'),
+            ('\u041f\u0440\u043e\u0438\u0441\u0445\u043e\u0436\u0434\u0435\u043d\u0438\u0435', 'substory'),
+            ('\u0420\u0430\u0441\u0430', 'race'), ('\u041f\u043e\u0434\u0440\u0430\u0441\u0430', 'subrace'),
+            ('\u0420\u043e\u0441\u0442', 'size'), ('\u0421\u0438\u043b\u0430', 'strength'),
+            ('\u0421\u043a\u043e\u0440\u043e\u0441\u0442\u044c', 'speed'), ('\u0418\u043d\u0442\u0435\u043b\u043b\u0435\u043a\u0442', 'iq'),
+            ('\u0411\u043e\u0435\u0432\u044b\u0435 \u043d\u0430\u0432\u044b\u043a\u0438', 'fighting'),
+            ('\u041e\u0440\u0443\u0436\u0438\u0435', 'weapon'), ('\u0412\u043b\u0430\u0434\u0435\u043d\u0438\u0435 \u043e\u0440\u0443\u0436\u0438\u0435\u043c', 'weapon_mastery'),
+            ('\u0417\u0430\u0447\u0430\u0440\u043e\u0432\u0430\u043d\u0438\u0435 \u043e\u0440\u0443\u0436\u0438\u044f', 'weapon_enchantment'),
+            ('\u0421\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u044c', 'ability'), ('\u041c\u043e\u0449\u044c \u0441\u043f\u043e\u0441\u043e\u0431\u043d\u043e\u0441\u0442\u0438', 'ability_power'),
+            ('\u0425\u0430\u043e\u0441', 'chaos'), ('\u0422\u0438\u0442\u0443\u043b', 'title'),
+        )
+        for label, key in fields:
+            raw_value = properties.get(key, '').strip()
+            if not raw_value or raw_value.casefold() == 'none':
+                continue
+            value = self._readable_creation_value(raw_value)
+            self.detail.insert('end', f'{label}\n', 'field')
+            self.detail.insert('end', f'{value}\n\n', 'value')
+        self.detail.configure(state='disabled')
+        self._draw_character_card(properties)
 
 
 def run():

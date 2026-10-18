@@ -127,6 +127,7 @@ def run_tournament(character_paths):
     first, second = semifinal_winners
     final_result = Fight.play(first, second)
     champion = final_result['winner_path']
+    champion_points = Fight.change_points(champion, 50)
     final = {
         'first': characters[first].get('name', first.stem),
         'second': characters[second].get('name', second.stem),
@@ -150,6 +151,7 @@ def run_tournament(character_paths):
         'report': '\n'.join(report),
         'groups': groups,
         'champion_path': champion,
+        'champion_points': champion_points,
         'bracket': {
             'quarterfinals': quarterfinals,
             'semifinals': semifinals,
