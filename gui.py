@@ -1,9 +1,12 @@
 ﻿from pathlib import Path
 from contextlib import redirect_stdout
 from io import StringIO
+import ctypes
+import ctypes.util
 import json
 import logging
 import math
+import os
 import random
 import re
 import sys
@@ -32,8 +35,8 @@ FIGHT_HIT_FLASH_MS = 450
 # A lost ladder fight is shown and heard for a moment before the defeat dialog.
 LADDER_DEFEAT_PAUSE_MS = 1000
 # Borders of the winner and the loser of a fight; the loser colour also marks a lost round.
-WINNER_COLOR = '#25834b'
-LOSER_COLOR = '#c34747'
+WINNER_COLOR = '#3f7d3a'
+LOSER_COLOR = '#a8322a'
 # Mouse wheels report notches of 120; one notch scrolls this many units.
 WHEEL_UNITS_PER_NOTCH = 3
 # Tk 8.6 on macOS reports wheels and touchpads in lines: one line in pixels.
@@ -46,6 +49,12 @@ TOUCHPAD_EVENTS = tk.TkVersion >= 8.7
 SELF_SCROLLING_CLASSES = {'Text', 'Treeview', 'Listbox', 'TCombobox'}
 # Text width of the ability line in the bottom bar of a collection card (254 px wide).
 CARD_ABILITY_WIDTH = 240
+# Smallest and largest scale of the tournament bracket, zoomed by hand or fitted to the window.
+BRACKET_ZOOM_LIMITS = (0.25, 2.4)
+# Width of the value column on an arena stats card, in digits of its font; longer values are cut.
+FIGHT_CARD_VALUE_CHARS = 14
+# Stats that may take two lines on an arena stats card; they always get both, so rows keep their height.
+FIGHT_CARD_TWO_LINE_STATS = {'ability', 'title'}
 # Upgradable stats; each pool lists tiers from the best to the worst.
 UPGRADE_POOLS = {
     'strength': data.strength_sum,
@@ -56,6 +65,14 @@ UPGRADE_POOLS = {
     'ability_power': data.ability_power_sum,
 }
 UPGRADE_BASE_COST = 5
+FONTS_DIR = Path(__file__).resolve().parent / 'fonts'
+# Font roles: the bundled fonts first, then serif fonts that most systems have.
+FONT_CHOICES = {
+    'title': ('Ruslan Display', 'Palatino Linotype', 'Palatino', 'Georgia', 'Times New Roman'),
+    'text': ('Kurale', 'Palatino Linotype', 'Palatino', 'Georgia', 'Times New Roman'),
+}
+# Chosen by resolve_fonts() once Tk is running.
+TITLE_FONT = TEXT_FONT = 'Georgia'
 TEMPLATES_DIR = Path(__file__).resolve().parent / 'CardTemplates'
 # Card pictures for race, weapon and size values, matched case-insensitively.
 RACE_TEMPLATES = {race.casefold(): template for race, template in zip(data.race_sum, ('human', 'orc', 'elf'))}
@@ -71,46 +88,62 @@ WEAPON_GRIPS = {
     'pistol': (0.83, 0.76), 'portal_cannon': (0.90, 0.90), 'tank': (0.58, 0.62),
 }
 # Every theme colour once, as (dark, light); pages look colours up by meaning.
+# Dark is a candle-lit hall of old oak and gold; light is a manuscript of parchment and vermilion.
 THEME_COLORS = {
-    'background': ('#111820', '#f3f6f8'),
-    'surface': ('#1b2632', '#ffffff'),
-    'input': ('#253342', '#ffffff'),
-    'foreground': ('#e8eef3', '#182530'),
-    'muted': ('#9aabb9', '#657681'),
-    'accent': ('#477c86', '#356d78'),
-    'accent_hover': ('#568f98', '#2c5962'),
-    'border': ('#2b3947', '#dce4e9'),
-    'hover': ('#3a5e6a', '#80a3ab'),
-    'skip': ('#e0ad4f', '#d99a2b'),
-    'skip_hover': ('#efc46d', '#bd7e18'),
-    'victory_text': ('#91e2ac', '#25834b'),
-    'defeat_text': ('#ffaaaa', '#c34747'),
-    'win_fill': ('#214a36', '#d9f2df'),
-    'win_text': ('#a8efbd', '#176b35'),
-    'lose_fill': ('#542d32', '#f8dddd'),
-    'lose_text': ('#ffb5b5', '#a12d35'),
-    'out_fill': ('#512b32', '#f7dddd'),
-    'out_text': ('#ffadb6', '#9e2727'),
-    'champion_fill': ('#254b39', '#d8f3dc'),
-    'champion_text': ('#d7f5df', '#205c38'),
-    'eliminated_fill': ('#4a292c', '#fce8e6'),
-    'eliminated_text': ('#f0b8b8', '#9f3838'),
-    'arena_fill': ('#20242a', '#f0f0f0'),
-    'arena_text': ('#e9edf2', '#263448'),
-    'bracket_background': ('#17191c', '#f0f0f0'),
-    'bracket_card': ('#252b33', '#ffffff'),
-    'bracket_muted': ('#aab4c0', '#667085'),
-    'fight_card': ('#20242a', '#fffaf0'),
-    'fight_card_border': ('#c69b4b', '#d6bd88'),
-    'fight_card_text': ('#f4ead6', '#332b20'),
-    'gold_text': ('#d7b76f', '#8b672a'),
-    'portrait_text': ('#f1f3f5', '#202124'),
-    'dead_border': ('#ff707a', '#c73d46'),
-    'dead_fill': ('#3c2429', '#fbe4e4'),
-    'dead_text': ('#ff9aa0', '#a8232d'),
-    'dead_bar': ('#55232a', '#8f2730'),
-    'card_accent': ('#d3aa56', '#b4822e'),
+    'background': ('#140f0a', '#e8dbbf'),
+    'surface': ('#221811', '#f3e9d2'),
+    'input': ('#2c2016', '#fbf5e6'),
+    'foreground': ('#efe2c2', '#2e2015'),
+    'muted': ('#a68f6a', '#76603f'),
+    'title': ('#d9b45a', '#7a1f14'),
+    'accent': ('#b8862e', '#8e2318'),
+    'accent_hover': ('#d4a03f', '#a8301f'),
+    'on_accent': ('#1b130c', '#fbf3e0'),
+    'border': ('#46351f', '#c4ad84'),
+    'frame_border': ('#7a5c2e', '#b08a52'),
+    'bevel_light': ('#3a2a1b', '#fffaf0'),
+    'bevel_dark': ('#0c0805', '#bfa77b'),
+    'hover': ('#8a6a35', '#b08f5c'),
+    'skip': ('#b5642a', '#c06a2a'),
+    'skip_hover': ('#cf7a36', '#a85a22'),
+    'victory_text': ('#a3d28a', '#2f6b2a'),
+    'defeat_text': ('#e8806e', '#a12a1f'),
+    'win_fill': ('#26391f', '#dbe8c6'),
+    'win_text': ('#bfe3a1', '#2b5a24'),
+    'lose_fill': ('#401c18', '#f2d3c7'),
+    'lose_text': ('#f4a596', '#8f2418'),
+    'out_fill': ('#3b1f1a', '#eed5c9'),
+    'out_text': ('#eaa797', '#8a2a1e'),
+    'champion_fill': ('#3d3216', '#efe0a8'),
+    'champion_text': ('#f2d47c', '#5c4410'),
+    'eliminated_fill': ('#3a201b', '#efd8cd'),
+    'eliminated_text': ('#dca394', '#8a3a2c'),
+    'arena_fill': ('#1d1510', '#efe3c8'),
+    'arena_text': ('#efe2c2', '#2e2015'),
+    'bracket_background': ('#100b07', '#e1d2b0'),
+    'bracket_card': ('#2a1f16', '#f8f0dc'),
+    'bracket_muted': ('#a68f6a', '#76603f'),
+    'fight_card': ('#1f1610', '#fbf3df'),
+    'fight_card_border': ('#8a6a32', '#b8955a'),
+    'fight_card_text': ('#efe2c2', '#2e2015'),
+    'gold_text': ('#d4b06a', '#8a6420'),
+    'portrait_text': ('#efe2c2', '#2e2015'),
+    'dead_border': ('#c0504a', '#a8322a'),
+    'dead_fill': ('#3a1714', '#f3d9d2'),
+    'dead_text': ('#f0a49a', '#8f2418'),
+    'dead_bar': ('#5a1c18', '#7a2018'),
+    'card_accent': ('#d4af37', '#a8822e'),
 }
+# The chronicle is always written on parchment, whatever the theme.
+PARCHMENT = {'paper': '#ecdcb6', 'ink': '#2b1d12', 'rubric': '#7a1f14', 'heading': '#5a3a1a',
+             'gilt': '#8a6420', 'faded': '#7a6243', 'code': '#e2cfa3'}
+# Gold leaf, dark oak and light text for wooden and painted parts that look the same in both themes.
+GILT, WOOD, PARCHMENT_TEXT = '#d4af37', '#2a1d12', '#f6ecd2'
+# Heraldic tinctures for the wheel segments, each with the text colour that reads on it:
+# gules, azure, vert, purpure, or, argent, tenné, sable, murrey.
+TINCTURES = (('#9b1c1c', PARCHMENT_TEXT), ('#1f4e8c', PARCHMENT_TEXT), ('#2f6b3a', PARCHMENT_TEXT),
+             ('#5b2f73', PARCHMENT_TEXT), ('#c9a227', WOOD), ('#9aa0a8', WOOD), ('#a8561e', PARCHMENT_TEXT),
+             ('#3a3330', PARCHMENT_TEXT), ('#6b1f3a', PARCHMENT_TEXT))
 
 logger = logging.getLogger(__name__)
 
@@ -127,9 +160,100 @@ def weapon_origin(template, weapon, hand_x, hand_y):
     return hand_x - weapon.width() * grip_x, hand_y - weapon.height() * grip_y
 
 
+def fit_text(text, font, width):
+    """The text, cut short with an ellipsis when it is wider than `width` pixels in `font`."""
+    measure = tkfont.Font(font=font).measure
+    if measure(text) <= width:
+        return text
+    while text and measure(text.rstrip() + '…') > width:
+        text = text[:-1]
+    return text.rstrip() + '…'
+
+
+def screen_work_area(root):
+    """The screen without the taskbar as (left, top, right, bottom); outside Windows, the whole screen."""
+    if sys.platform == 'win32':
+        area = (ctypes.c_long * 4)()  # RECT
+        if ctypes.windll.user32.SystemParametersInfoW(0x30, 0, area, 0):  # SPI_GETWORKAREA
+            return tuple(area)
+    return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
+
+
+def title_bar_height(root):
+    """Height of the title bar, which Tk leaves out of the window size; counted on Windows only."""
+    if sys.platform != 'win32':
+        return 0
+    if root.winfo_ismapped():
+        return max(0, root.winfo_rooty() - root.winfo_y())
+    metric = ctypes.windll.user32.GetSystemMetrics
+    return metric(4) + metric(33) + metric(92)  # SM_CYCAPTION, SM_CYSIZEFRAME, SM_CXPADDEDBORDER
+
+
 def _signed16(value):
     value &= 0xFFFF
     return value - 0x10000 if value >= 0x8000 else value
+
+
+def _load_library(name):
+    path = ctypes.util.find_library(name)
+    if path is None:
+        raise OSError(f'библиотека {name} не найдена')
+    return ctypes.CDLL(path)
+
+
+def _register_fonts_macos(paths):
+    core_text, core_foundation = _load_library('CoreText'), _load_library('CoreFoundation')
+    core_foundation.CFURLCreateFromFileSystemRepresentation.restype = ctypes.c_void_p
+    core_foundation.CFURLCreateFromFileSystemRepresentation.argtypes = (
+        ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_bool)
+    core_foundation.CFRelease.argtypes = (ctypes.c_void_p,)
+    core_text.CTFontManagerRegisterFontsForURL.restype = ctypes.c_bool
+    core_text.CTFontManagerRegisterFontsForURL.argtypes = (ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p)
+    for path in paths:
+        raw = os.fsencode(path)
+        url = core_foundation.CFURLCreateFromFileSystemRepresentation(None, raw, len(raw), False)
+        try:
+            if not core_text.CTFontManagerRegisterFontsForURL(url, 1, None):  # process scope
+                logger.warning('Шрифт не подключён: %s', path.name)
+        finally:
+            core_foundation.CFRelease(url)
+
+
+def _register_fonts_fontconfig(paths):
+    fontconfig = _load_library('fontconfig')
+    fontconfig.FcConfigAppFontAddFile.argtypes = (ctypes.c_void_p, ctypes.c_char_p)
+    for path in paths:
+        if not fontconfig.FcConfigAppFontAddFile(None, os.fsencode(path)):
+            logger.warning('Шрифт не подключён: %s', path.name)
+
+
+def load_bundled_fonts():
+    """Make the fonts from fonts/ available to this process only; call before Tk starts."""
+    paths = sorted(FONTS_DIR.glob('*.ttf'))
+    try:
+        if sys.platform == 'win32':
+            for path in paths:
+                if not ctypes.windll.gdi32.AddFontResourceExW(str(path), 0x10, 0):  # FR_PRIVATE
+                    logger.warning('Шрифт не подключён: %s', path.name)
+        elif sys.platform == 'darwin':
+            _register_fonts_macos(paths)
+        else:
+            _register_fonts_fontconfig(paths)
+    except (OSError, AttributeError) as error:
+        logger.warning('Встроенные шрифты недоступны, будут системные: %s', error)
+
+
+def resolve_fonts(root):
+    """Pick the first installed family for each font role."""
+    global TITLE_FONT, TEXT_FONT
+    available = set(tkfont.families(root))
+    chosen = {role: next((family for family in choices if family in available), choices[-1])
+              for role, choices in FONT_CHOICES.items()}
+    TITLE_FONT, TEXT_FONT = chosen['title'], chosen['text']
+    # Entries, combobox lists and every other widget left on Tk's defaults read in the text font too.
+    for name in ('TkDefaultFont', 'TkTextFont', 'TkMenuFont', 'TkHeadingFont', 'TkCaptionFont'):
+        tkfont.nametofont(name, root=root).configure(family=TEXT_FONT)
+    logger.info('Шрифты: заголовки «%s», текст «%s»', TITLE_FONT, TEXT_FONT)
 
 
 def upgrade_cost(stat, value):
@@ -324,6 +448,7 @@ class CharacterApp:
         root.bind('<Escape>', self._leave_fullscreen)
         self.style = ttk.Style(root)
         self.image_cache = {}
+        resolve_fonts(root)
         self.aqua = root.tk.call('tk', 'windowingsystem') == 'aqua'
         self.scroll_remainders = {}
         self.page_canvases = {}
@@ -433,76 +558,86 @@ class CharacterApp:
         theme = 0 if self.dark_theme else 1
         colors = {name: pair[theme] for name, pair in THEME_COLORS.items()}
         self.ui_colors = colors
-        self.style.configure('.', background=colors['background'], foreground=colors['foreground'])
-        self.style.configure('TFrame', background=colors['background'])
-        self.style.configure('TLabel', background=colors['background'], foreground=colors['foreground'])
-        self.style.configure('TButton', background=colors['surface'], foreground=colors['foreground'],
-                             bordercolor=colors['border'], padding=(12, 9),
-                             font=('Segoe UI', 10), relief='flat')
-        self.style.map('TButton', background=[('active', colors['accent_hover'])],
-                       foreground=[('active', '#ffffff')])
-        self.style.configure('Section.TLabel', font=('Segoe UI', 10, 'bold'))
-        self.style.configure('Muted.TLabel', background=colors['surface'], foreground=colors['muted'])
-        self.style.configure('Creation.Horizontal.TProgressbar', troughcolor=colors['input'],
-                             background=colors['accent'], bordercolor=colors['border'], thickness=10)
-        self.style.configure('Primary.TButton', background=colors['accent'],
-                             foreground='#ffffff', padding=(16, 10),
-                             font=('Segoe UI', 10, 'bold'), borderwidth=0)
-        self.style.map(
-            'Primary.TButton',
-            background=[('disabled', colors['surface']), ('active', colors['accent_hover'])],
-            foreground=[('disabled', colors['muted']), ('active', '#ffffff')],
-        )
-        self.style.configure('LadderCount.TLabel', background=colors['surface'],
-                             foreground=colors['muted'], padding=(12, 10),
-                             font=('Segoe UI', 10, 'bold'))
-        skip_foreground = '#17212b'
-        self.style.configure('Skip.TButton', background=colors['skip'],
-                             foreground=skip_foreground, padding=(18, 11),
-                             font=('Segoe UI', 10, 'bold'), borderwidth=0)
-        self.style.map(
-            'Skip.TButton',
-            background=[('disabled', colors['surface']), ('pressed', colors['skip_hover']),
-                        ('active', colors['skip_hover'])],
-            foreground=[('disabled', colors['muted']), ('!disabled', skip_foreground)],
-        )
-        self.style.configure('TEntry', fieldbackground=colors['input'], foreground=colors['foreground'],
-                             bordercolor=colors['border'], padding=7)
-        self.style.configure('TCombobox', fieldbackground=colors['input'], foreground=colors['foreground'])
-        self.style.map('TCombobox', fieldbackground=[('readonly', colors['input'])],
-                       foreground=[('readonly', colors['foreground'])],
-                       background=[('active', colors['surface'])])
-        self.style.configure('TCheckbutton', background=colors['background'], foreground=colors['foreground'])
-        self.style.map('TCheckbutton', background=[('active', colors['background'])],
-                       foreground=[('active', colors['foreground'])])
-        self.style.configure('Treeview', background=colors['surface'], fieldbackground=colors['surface'],
-                             foreground=colors['foreground'], rowheight=32, borderwidth=0,
-                             font=('Segoe UI', 9))
-        self.style.configure('Treeview.Heading', background=colors['background'],
-                             foreground=colors['muted'], font=('Segoe UI', 9, 'bold'), padding=8)
-        self.style.map('Treeview', background=[('selected', colors['accent'])],
-                       foreground=[('selected', colors['foreground'])])
-        self.style.configure('TLabelframe', background=colors['surface'], bordercolor=colors['border'],
-                             relief='solid', borderwidth=1)
-        self.style.configure('TLabelframe.Label', background=colors['surface'],
-                             foreground=colors['muted'], font=('Segoe UI', 9, 'bold'))
-        self.style.configure('TNotebook', background=colors['background'], borderwidth=0)
-        self.style.configure('TNotebook.Tab', background=colors['surface'],
-                             foreground=colors['foreground'], padding=(10, 5))
-        self.style.map('TNotebook.Tab', background=[('selected', colors['accent'])],
-                       foreground=[('selected', colors['foreground'])])
-        self.style.configure('TScrollbar', background=colors['surface'],
-                             troughcolor=colors['background'], arrowcolor=colors['foreground'])
+        self.root.configure(background=colors['background'])
+        style = self.style
+        # Defaults for every ttk widget: warm colours and carved, bevelled edges.
+        style.configure('.', background=colors['background'], foreground=colors['foreground'],
+                        bordercolor=colors['border'], lightcolor=colors['bevel_light'],
+                        darkcolor=colors['bevel_dark'], troughcolor=colors['input'],
+                        fieldbackground=colors['input'], selectbackground=colors['accent'],
+                        selectforeground=colors['on_accent'], insertcolor=colors['foreground'],
+                        arrowcolor=colors['gold_text'])
+        style.configure('TFrame', background=colors['background'])
+        style.configure('TLabel', background=colors['background'], foreground=colors['foreground'])
+        style.configure('TButton', background=colors['surface'], foreground=colors['foreground'],
+                        bordercolor=colors['frame_border'], padding=(12, 9), font=(TEXT_FONT, 10))
+        style.map('TButton', background=[('disabled', colors['background']), ('pressed', colors['accent']),
+                                         ('active', colors['accent_hover'])],
+                  foreground=[('disabled', colors['muted']), ('active', colors['on_accent'])])
+        for name, background, hover, text in (
+            ('Primary.TButton', colors['accent'], colors['accent_hover'], colors['on_accent']),
+            ('Skip.TButton', colors['skip'], colors['skip_hover'], colors['on_accent']),
+        ):
+            style.configure(name, background=background, foreground=text, bordercolor=colors['title'],
+                            padding=(16, 10), font=(TEXT_FONT, 10, 'bold'))
+            style.map(name, background=[('disabled', colors['surface']), ('pressed', hover), ('active', hover)],
+                      foreground=[('disabled', colors['muted']), ('!disabled', text)])
+        style.configure('Heading.TLabel', font=(TITLE_FONT, 22), foreground=colors['title'])
+        style.configure('Section.TLabel', font=(TITLE_FONT, 12), foreground=colors['title'])
+        style.configure('Muted.TLabel', foreground=colors['muted'])
+        style.configure('LadderCount.TLabel', background=colors['surface'], foreground=colors['muted'],
+                        padding=(12, 10), font=(TEXT_FONT, 10, 'bold'))
+        style.configure('Creation.Horizontal.TProgressbar', background=colors['accent'],
+                        bordercolor=colors['frame_border'], lightcolor=colors['accent_hover'],
+                        darkcolor=colors['accent'], thickness=10)
+        style.configure('TEntry', foreground=colors['foreground'], bordercolor=colors['frame_border'], padding=7)
+        style.map('TEntry', bordercolor=[('focus', colors['title'])])
+        style.configure('TCombobox', foreground=colors['foreground'], background=colors['surface'],
+                        bordercolor=colors['frame_border'])
+        style.map('TCombobox', fieldbackground=[('readonly', colors['input'])],
+                  foreground=[('readonly', colors['foreground'])], background=[('active', colors['hover'])])
+        self.root.option_add('*TCombobox*Listbox.background', colors['input'])
+        self.root.option_add('*TCombobox*Listbox.foreground', colors['foreground'])
+        self.root.option_add('*TCombobox*Listbox.selectBackground', colors['accent'])
+        self.root.option_add('*TCombobox*Listbox.selectForeground', colors['on_accent'])
+        style.configure('TCheckbutton', background=colors['background'], foreground=colors['foreground'],
+                        indicatorbackground=colors['input'], indicatorforeground=colors['title'],
+                        upperbordercolor=colors['frame_border'], lowerbordercolor=colors['frame_border'])
+        style.map('TCheckbutton', background=[('active', colors['background'])],
+                  foreground=[('active', colors['title'])])
+        style.configure('Treeview', background=colors['surface'], fieldbackground=colors['surface'],
+                        foreground=colors['foreground'], rowheight=32, borderwidth=0, font=(TEXT_FONT, 10))
+        style.configure('Treeview.Heading', background=colors['input'], foreground=colors['gold_text'],
+                        font=(TEXT_FONT, 10, 'bold'), padding=8)
+        style.map('Treeview.Heading', background=[('active', colors['border'])])
+        style.map('Treeview', background=[('selected', colors['accent'])],
+                  foreground=[('selected', colors['on_accent'])])
+        style.configure('TLabelframe', background=colors['background'], bordercolor=colors['frame_border'],
+                        relief='solid', borderwidth=1)
+        style.configure('TLabelframe.Label', background=colors['background'], foreground=colors['title'],
+                        font=(TITLE_FONT, 11))
+        style.configure('TNotebook', background=colors['background'], borderwidth=0,
+                        bordercolor=colors['frame_border'])
+        style.configure('TNotebook.Tab', background=colors['input'], foreground=colors['muted'],
+                        bordercolor=colors['frame_border'], padding=(12, 5), font=(TEXT_FONT, 10))
+        style.map('TNotebook.Tab', background=[('selected', colors['surface'])],
+                  foreground=[('selected', colors['title'])])
+        style.configure('TScrollbar', background=colors['border'], troughcolor=colors['background'],
+                        bordercolor=colors['frame_border'], gripcount=0)
+        style.map('TScrollbar', background=[('active', colors['hover'])])
+        style.configure('Horizontal.TScale', background=colors['accent'], troughcolor=colors['input'],
+                        bordercolor=colors['frame_border'], lightcolor=colors['accent_hover'],
+                        darkcolor=colors['accent'])
 
         def recolor(widget):
-            if isinstance(widget, (tk.Text, tk.Listbox)):
+            # Canvases and widgets marked keep_colors (the chronicle's parchment) keep their own colours.
+            if isinstance(widget, (tk.Text, tk.Listbox)) and not getattr(widget, 'keep_colors', False):
                 widget.configure(bg=colors['input'], fg=colors['foreground'],
-                                 selectbackground=colors['accent'],
+                                 selectbackground=colors['accent'], selectforeground=colors['on_accent'],
                                  highlightbackground=colors['background'],
                                  highlightcolor=colors['accent'])
                 if isinstance(widget, tk.Text):
                     widget.configure(insertbackground=colors['foreground'])
-            # Canvases are left alone: every page gives them their own background.
             for child in widget.winfo_children():
                 recolor(child)
 
@@ -523,10 +658,10 @@ class CharacterApp:
             return
         geometry = self.window_resolution or self.page_geometry
         width, height = (int(value) for value in geometry.split('x'))
-        screen_width = self.root.winfo_screenwidth()
-        screen_height = self.root.winfo_screenheight()
-        x = max(0, (screen_width - width) // 2)
-        y = max(0, (screen_height - height) // 2)
+        left, top, right, bottom = screen_work_area(self.root)
+        # Centre the window, title bar included, on the part of the screen the taskbar leaves free.
+        x = max(left, left + (right - left - width) // 2)
+        y = max(top, top + (bottom - top - title_bar_height(self.root) - height) // 2)
         self.root.geometry(f'{width}x{height}+{x}+{y}')
 
     def _wheel_scale(self, reference_width, reference_height):
@@ -589,7 +724,7 @@ class CharacterApp:
             self._save_settings()
 
     def heading(self, parent, text):
-        ttk.Label(parent, text=text, font=('Segoe UI', 19, 'bold')).pack(anchor='w', pady=(0, 16))
+        ttk.Label(parent, text=text, style='Heading.TLabel').pack(anchor='w', pady=(0, 14))
 
     def _scrollable_page(self, page_scale):
         """The page frame; on small screens it sits in a vertically scrollable canvas."""
@@ -700,29 +835,29 @@ class CharacterApp:
         return None
 
     def _render_markdown(self, widget, markdown):
-        """Render the common Markdown elements used by the intro lore."""
-        colors = self.ui_colors
-        widget.tag_configure('h1', font=('Segoe UI', 24, 'bold'), foreground=colors['accent'],
-                             spacing1=12, spacing3=14)
-        widget.tag_configure('h2', font=('Segoe UI', 17, 'bold'), foreground=colors['foreground'],
-                             spacing1=10, spacing3=8)
-        widget.tag_configure('h3', font=('Segoe UI', 13, 'bold'), foreground=colors['accent'],
+        """Render the common Markdown elements of the lore as a page of a parchment chronicle."""
+        ink = PARCHMENT
+        widget.tag_configure('h1', font=(TITLE_FONT, 28), foreground=ink['rubric'], justify='center',
+                             spacing1=12, spacing3=16)
+        widget.tag_configure('h2', font=(TITLE_FONT, 19), foreground=ink['heading'],
+                             spacing1=14, spacing3=8)
+        widget.tag_configure('h3', font=(TEXT_FONT, 15, 'bold'), foreground=ink['gilt'],
                              spacing1=8, spacing3=5)
-        widget.tag_configure('paragraph', font=('Segoe UI', 11), spacing1=2, spacing3=10,
+        widget.tag_configure('paragraph', font=(TEXT_FONT, 13), spacing1=2, spacing3=10,
                              lmargin1=2, lmargin2=2)
-        widget.tag_configure('quote', font=('Segoe UI', 11, 'italic'),
-                             foreground=colors['muted'], lmargin1=18, lmargin2=18,
+        widget.tag_configure('quote', font=(TEXT_FONT, 13, 'italic'),
+                             foreground=ink['faded'], lmargin1=24, lmargin2=24,
                              spacing1=4, spacing3=10)
-        widget.tag_configure('list', font=('Segoe UI', 11), lmargin1=18, lmargin2=38,
+        widget.tag_configure('list', font=(TEXT_FONT, 13), lmargin1=18, lmargin2=38,
                              spacing1=1, spacing3=4)
-        widget.tag_configure('code', font=('Consolas', 10), background=colors['input'],
+        widget.tag_configure('code', font=('Consolas', 10), background=ink['code'],
                              lmargin1=14, lmargin2=14, spacing1=4, spacing3=8)
-        widget.tag_configure('bold', font=('Segoe UI', 11, 'bold'))
-        widget.tag_configure('italic', font=('Segoe UI', 11, 'italic'))
+        widget.tag_configure('bold', font=(TEXT_FONT, 13, 'bold'))
+        widget.tag_configure('italic', font=(TEXT_FONT, 13, 'italic'))
         widget.tag_configure('strike', overstrike=True)
-        widget.tag_configure('inline_code', font=('Consolas', 10), background=colors['input'])
-        widget.tag_configure('link', foreground=colors['accent'], underline=True)
-        widget.tag_configure('rule', foreground=colors['muted'], justify='center', spacing1=5, spacing3=12)
+        widget.tag_configure('inline_code', font=('Consolas', 10), background=ink['code'])
+        widget.tag_configure('link', foreground=ink['rubric'], underline=True)
+        widget.tag_configure('rule', foreground=ink['gilt'], justify='center', spacing1=5, spacing3=12)
 
         inline_pattern = re.compile(
             r'(\*\*.+?\*\*|__.+?__|~~.+?~~|`[^`]+`|\*[^*]+\*|_[^_]+_|\[[^\]]+\]\([^)]+\))'
@@ -779,7 +914,7 @@ class CharacterApp:
 
             if re.fullmatch(r'([-*_]\s*){3,}', stripped):
                 flush_paragraph()
-                widget.insert('end', '────────────────────────────────────────\n', 'rule')
+                widget.insert('end', '──────────  ❦  ──────────\n', 'rule')
                 index += 1
                 continue
 
@@ -854,19 +989,37 @@ class CharacterApp:
         self._scale_page(900, 720)
         frame = ttk.Frame(self.root, padding=(30, 22))
         frame.pack(fill='both', expand=True)
-        ttk.Label(frame, text=title,
-                  font=('Segoe UI', 24, 'bold')).pack(anchor='w')
+        ttk.Label(frame, text=title, font=(TITLE_FONT, 26), foreground=self.ui_colors['title']).pack(anchor='w')
         ttk.Label(frame, text=subtitle,
-                  foreground=self.ui_colors['muted'], font=('Segoe UI', 10)).pack(
+                  foreground=self.ui_colors['muted'], font=(TEXT_FONT, 11, 'italic')).pack(
                       anchor='w', pady=(2, 14)
                   )
+
+        # The buttons are packed before the chronicle, so a long text can never push them out of the window.
+        controls = ttk.Frame(frame)
+        controls.pack(side='bottom', fill='x', pady=(14, 0))
+        self.intro_pause_button = ttk.Button(
+            controls, text='Пауза', command=self._toggle_intro_scroll,
+        )
+        self.intro_pause_button.pack(side='left')
+        ttk.Label(
+            controls, text='Колесо мыши или полоса прокрутки — вручную',
+            foreground=self.ui_colors['muted'],
+        ).pack(side='left', padx=12)
+        ttk.Button(
+            controls, text=finish_label, command=finish_command, style='Primary.TButton',
+        ).pack(side='right')
 
         text_area = ttk.Frame(frame)
         text_area.pack(fill='both', expand=True)
         text = tk.Text(
-            text_area, wrap='word', padx=26, pady=22, relief='flat', borderwidth=0,
-            font=('Segoe UI', 11), spacing1=2, spacing3=8, takefocus=True,
+            text_area, wrap='word', padx=44, pady=28, relief='flat', borderwidth=0,
+            font=(TEXT_FONT, 13), spacing1=2, spacing3=8, takefocus=True,
+            background=PARCHMENT['paper'], foreground=PARCHMENT['ink'],
+            insertbackground=PARCHMENT['ink'], selectbackground=PARCHMENT['gilt'],
+            highlightthickness=3, highlightbackground=PARCHMENT['gilt'], highlightcolor=PARCHMENT['gilt'],
         )
+        text.keep_colors = True  # a parchment scroll in both themes
         scrollbar = ttk.Scrollbar(
             text_area, orient='vertical', command=self._intro_scrollbar_command,
         )
@@ -888,20 +1041,6 @@ class CharacterApp:
         self._render_markdown(text, markdown)
         text.configure(state='disabled')
         text.yview_moveto(0)
-
-        controls = ttk.Frame(frame)
-        controls.pack(fill='x', pady=(14, 0))
-        self.intro_pause_button = ttk.Button(
-            controls, text='Пауза', command=self._toggle_intro_scroll,
-        )
-        self.intro_pause_button.pack(side='left')
-        ttk.Label(
-            controls, text='Колесо мыши или полоса прокрутки — вручную',
-            foreground=self.ui_colors['muted'],
-        ).pack(side='left', padx=12)
-        ttk.Button(
-            controls, text=finish_label, command=finish_command, style='Primary.TButton',
-        ).pack(side='right')
 
         self._bind_mousewheel((text,), self._on_intro_mousewheel)
         text.bind('<KeyPress>', self._on_intro_keypress)
@@ -985,44 +1124,65 @@ class CharacterApp:
         self.audio.play_music('main_menu')
         self._set_page_geometry('600x700')
         colors = self.ui_colors
-        frame = ttk.Frame(self.root, padding=(36, 26))
+        frame = ttk.Frame(self.root, padding=(36, 16))
         frame.pack(fill='both', expand=True)
-        ttk.Label(frame, text='Неудачный забег',
-                  font=('Segoe UI', 25, 'bold')).pack(pady=(6, 3))
+        # The footer is packed first, so the menu above can never push it out of the window.
+        footer = ttk.Frame(frame)
+        footer.pack(side='bottom', fill='x', pady=(10, 0))
+        footer.columnconfigure((0, 1), weight=1, uniform='footer')
+        for index, (text, command, state) in enumerate((
+            ('📜 Читать лор', self.show_intro, 'normal'),
+            ('🏆 Статистика забегов', self.show_ladder_statistics, 'normal' if ladder_run_files() else 'disabled'),
+            ('⚙ Настройки', self.show_options, 'normal'),
+            ('🚪 Выйти из игры', self.close, 'normal'),
+        )):
+            row, column = divmod(index, 2)
+            ttk.Button(footer, text=text, command=command, state=state).grid(
+                row=row, column=column, sticky='ew',
+                padx=(0, 4) if column == 0 else (4, 0), pady=(0, 6) if row == 0 else 0)
+        ttk.Label(frame, text='Неудачный забег', font=(TITLE_FONT, 30),
+                  foreground=colors['title']).pack()
+        ttk.Label(frame, text='───────  ⚜  ───────', foreground=colors['frame_border'],
+                  font=(TEXT_FONT, 10)).pack()
         ttk.Label(frame, text='Создай героя, собери команду и узнай, кто победит.',
-                  foreground=colors['muted'], font=('Segoe UI', 10)).pack(pady=(0, 16))
+                  foreground=colors['muted'], font=(TEXT_FONT, 11, 'italic')).pack(pady=(0, 10))
         menu = ttk.Frame(frame)
         menu.pack(fill='both', expand=True)
         entries = (
-            ('Генератор героев', 'Создай нового персонажа', self.show_create),
-            ('Коллекция', 'Просматривай и прокачивай героев', self.show_characters),
-            ('Арена', 'Сравни двух бойцов в сражении', self.show_fight),
-            ('Турнир', 'Собери ростер и проведи чемпионат', self.show_tournament),
+            ('⚒', 'Генератор героев', 'Создай нового персонажа', self.show_create),
+            ('⚜', 'Коллекция', 'Просматривай и прокачивай героев', self.show_characters),
+            ('⚔', 'Арена', 'Сравни двух бойцов в сражении', self.show_fight),
+            ('♛', 'Турнир', 'Собери ростер и проведи чемпионат', self.show_tournament),
         )
-        for title, description, command in entries:
+        for emblem, title, description, command in entries:
             tile = tk.Frame(menu, bg=colors['surface'], highlightthickness=1,
-                            highlightbackground=colors['border'], padx=14, pady=7, cursor='hand2')
+                            highlightbackground=colors['frame_border'], padx=14, pady=6, cursor='hand2')
             tile.configure(takefocus=True)
-            tile.pack(fill='x', pady=4)
-            title_label = tk.Label(tile, text=title, bg=colors['surface'], fg=colors['foreground'],
-                                  font=('Segoe UI', 11, 'bold'), anchor='w')
-            title_label.pack(fill='x')
+            tile.pack(fill='x', pady=3)
+            tile.grid_columnconfigure(1, weight=1)
+            emblem_label = tk.Label(tile, text=emblem, bg=colors['surface'], fg=colors['gold_text'],
+                                    font=(TEXT_FONT, 20), width=2)
+            emblem_label.grid(row=0, column=0, rowspan=2, padx=(0, 12))
+            title_label = tk.Label(tile, text=title, bg=colors['surface'], fg=colors['title'],
+                                   font=(TITLE_FONT, 15), anchor='w')
+            title_label.grid(row=0, column=1, sticky='ew')
             description_label = tk.Label(tile, text=description, bg=colors['surface'], fg=colors['muted'],
-                                         font=('Segoe UI', 9), anchor='w')
-            description_label.pack(fill='x', pady=(2, 0))
-            for widget in (tile, title_label, description_label):
+                                         font=(TEXT_FONT, 10), anchor='w')
+            description_label.grid(row=1, column=1, sticky='ew')
+            for widget in (tile, emblem_label, title_label, description_label):
                 widget.bind('<Button-1>', lambda _event, action=command: self._activate_menu_tile(action))
                 widget.bind('<Return>', lambda _event, action=command: self._activate_menu_tile(action))
-                widget.bind('<Enter>', lambda _event, card=tile: card.configure(highlightbackground=colors['accent']))
-                widget.bind('<Leave>', lambda _event, card=tile: card.configure(highlightbackground=colors['border']))
+                widget.bind('<Enter>', lambda _event, card=tile: card.configure(highlightbackground=colors['title']))
+                widget.bind('<Leave>', lambda _event, card=tile: card.configure(
+                    highlightbackground=colors['frame_border']))
             tile.bind('<FocusIn>', lambda _event, card=tile: card.configure(
-                highlightbackground=colors['accent'], highlightthickness=2))
+                highlightbackground=colors['title'], highlightthickness=2))
             tile.bind('<FocusOut>', lambda _event, card=tile: card.configure(
-                highlightbackground=colors['border'], highlightthickness=1))
+                highlightbackground=colors['frame_border'], highlightthickness=1))
         ladder_area = ttk.Frame(menu)
         ladder_area.pack(fill='both', expand=True)
         ladder_actions = ttk.Frame(ladder_area)
-        ladder_actions.pack(anchor='center', pady=(32, 0))
+        ladder_actions.pack(anchor='center', pady=(12, 0))
         ttk.Button(
             ladder_actions, text='⚔ Забег в ладдер', command=self.show_ladder_picker,
             style='Primary.TButton',
@@ -1030,26 +1190,6 @@ class CharacterApp:
         ttk.Label(
             ladder_actions, text=f'Запусков: {ladder_run_count()}', style='LadderCount.TLabel',
         ).pack(side='left', padx=(10, 0))
-        footer = ttk.Frame(frame)
-        footer.pack(fill='x', pady=(8, 0))
-        ttk.Button(
-            footer, text='📜 Читать лор', command=self.show_intro,
-        ).pack(side='left', anchor='center')
-        exit_container = ttk.Frame(footer)
-        exit_container.pack(side='right')
-        statistics_button = ttk.Button(
-            exit_container, text='📊 Статистика забегов',
-            command=self.show_ladder_statistics, width=24,
-            state='normal' if ladder_run_files() else 'disabled',
-        )
-        statistics_button.pack(anchor='e', pady=(0, 5))
-        ttk.Button(exit_container, text='⚙ Настройки', command=self.show_options, width=24).pack(
-            anchor='e', pady=(0, 5)
-        )
-        exit_button = ttk.Button(
-            exit_container, text='⇥ Выйти из игры', command=self.close, width=24,
-        )
-        exit_button.pack(anchor='e')
 
     def show_ladder_statistics(self):
         self.clear()
@@ -1070,7 +1210,7 @@ class CharacterApp:
         ttk.Label(
             summary,
             text=f'Завершено забегов: {len(records)}    Побед: {wins}    Поражений: {losses}',
-            font=('Segoe UI', 11, 'bold'),
+            font=(TEXT_FONT, 11, 'bold'),
         ).pack(anchor='w')
 
         history = ttk.LabelFrame(frame, text='История', padding=8)
@@ -1227,8 +1367,7 @@ class CharacterApp:
         )
         settings = ttk.Frame(frame)
         settings.pack(expand=True)
-        ttk.Label(settings, text='Опции',
-                  font=('Segoe UI', 16, 'bold')).pack(pady=(0, 18))
+        ttk.Label(settings, text='Опции', style='Heading.TLabel').pack(pady=(0, 18))
         # Two columns keep the page within 800x600 even with a long audio status.
         general_column = ttk.Frame(settings)
         general_column.pack(side='left', anchor='n', padx=(0, 12))
@@ -1455,13 +1594,13 @@ class CharacterApp:
         for title, colors in (('Победитель', 'champion'), ('Выбыл', 'eliminated')):
             badge = tk.Label(legend, text=title, bg=self.ui_colors[f'{colors}_fill'],
                              fg=self.ui_colors[f'{colors}_text'],
-                             font=('Segoe UI', 8, 'bold'), padx=8, pady=3)
+                             font=(TEXT_FONT, 8, 'bold'), padx=8, pady=3)
             badge.pack(side='left', padx=(6, 0))
         self.bracket_canvas = tk.Canvas(bracket_tab, width=1120, height=390,
                                         highlightthickness=2, background=self.ui_colors['surface'],
                                         cursor='fleur', takefocus=True,
-                                        highlightbackground=self.ui_colors['border'],
-                                        highlightcolor=self.ui_colors['accent'])
+                                        highlightbackground=self.ui_colors['frame_border'],
+                                        highlightcolor=self.ui_colors['title'])
         self.bracket_canvas.bind(
             '<ButtonPress-1>', lambda event: self.bracket_canvas.scan_mark(event.x, event.y),
         )
@@ -1477,8 +1616,9 @@ class CharacterApp:
         bracket_yscroll = ttk.Scrollbar(bracket_tab, orient='vertical', command=self.bracket_canvas.yview)
         self.bracket_canvas.configure(xscrollcommand=bracket_xscroll.set, yscrollcommand=bracket_yscroll.set)
         bracket_yscroll.pack(side='right', fill='y')
+        bracket_xscroll.pack(side='bottom', fill='x')
         self.bracket_canvas.pack(fill='both', expand=True)
-        bracket_xscroll.pack(fill='x')
+        self.bracket_canvas.bind('<Configure>', self._refit_tournament_bracket)
         self.tournament_tabs.bind('<<NotebookTabChanged>>', self._on_tournament_tab_changed)
         self._draw_tournament_bracket(None)
         result_frame = ttk.Frame(report_tab)
@@ -1490,24 +1630,36 @@ class CharacterApp:
         canvas = self.bracket_canvas
         self.current_bracket = bracket
         self.bracket_zoom = 1.0
+        # Full text, font with its size at zoom 1, and room of every text item; see _scale_tournament_bracket.
+        self.bracket_texts = {}
         canvas.delete('all')
         colors = self.ui_colors
         foreground, card, muted = colors['arena_text'], colors['bracket_card'], colors['bracket_muted']
-        connector = '#64748b'
+        connector = colors['frame_border']
         champion_fill, champion_text = colors['champion_fill'], colors['champion_text']
         eliminated_fill, eliminated_text = colors['eliminated_fill'], colors['eliminated_text']
         canvas.configure(background=colors['bracket_background'])
-        columns = ((20, 'Четвертьфиналы'), (310, 'Полуфиналы'),
-                   (600, 'Финал'), (890, 'Победитель'))
-        for x, title in columns:
-            canvas.create_text(x + 110, 18, text=title, anchor='center', fill=foreground,
-                               font=('Segoe UI', 11, 'bold'))
 
         qf_y = (42, 129, 216, 303)
         sf_y = (86, 260)
         final_y = 173
         champion_y = 173
         card_width, card_height = 220, 58
+
+        pixels_per_point = canvas.winfo_fpixels('1p')
+
+        def write(x, y, text, font, width, **options):
+            family, points, weight = font
+            # Sizes in pixels (negative in Tk) let the zoom scale the text in steps finer than a point.
+            pixels = round(points * pixels_per_point)
+            font = (family, -pixels, weight)
+            item = canvas.create_text(x, y, text=fit_text(text, font, width), font=font, **options)
+            self.bracket_texts[item] = (text, family, pixels, weight, width)
+
+        columns = ((20, 'Четвертьфиналы'), (310, 'Полуфиналы'),
+                   (600, 'Финал'), (890, 'Победитель'))
+        for x, title in columns:
+            write(x + 110, 18, title, (TITLE_FONT, 12, 'normal'), card_width, anchor='center', fill=colors['title'])
 
         def center(y):
             return y + card_height / 2
@@ -1549,12 +1701,11 @@ class CharacterApp:
                                             line_y + 11,
                                             fill=champion_fill if is_winner else eliminated_fill,
                                             outline='')
-                canvas.create_text(x + 10, line_y, text=textwrap.shorten(name, 24),
-                                   anchor='w',
-                                   fill=champion_text if is_winner else eliminated_text if is_eliminated else foreground,
-                                   font=('Segoe UI', 9, 'bold' if is_winner or is_eliminated else 'normal'))
-                canvas.create_text(x + card_width - 10, line_y, text=str(score),
-                                   anchor='e', fill=muted, font=('Segoe UI', 9, 'bold'))
+                # The score on the right keeps 40 pixels for itself.
+                write(x + 10, line_y, name, (TEXT_FONT, 9, 'bold' if is_winner or is_eliminated else 'normal'),
+                      card_width - 60, anchor='w',
+                      fill=champion_text if is_winner else eliminated_text if is_eliminated else foreground)
+                write(x + card_width - 10, line_y, str(score), (TEXT_FONT, 9, 'bold'), 40, anchor='e', fill=muted)
 
         for y, match in zip(qf_y, quarterfinals):
             draw_match(20, y, match)
@@ -1564,13 +1715,11 @@ class CharacterApp:
         final_match = bracket['final'] if bracket else None
         champion = final_match['winner'] if final_match else 'Победитель турнира'
         canvas.create_rectangle(890, champion_y, 1110, champion_y + card_height,
-                                fill=champion_fill, outline=connector, width=1)
-        canvas.create_text(1000, champion_y + card_height / 2, text=textwrap.shorten(champion, 24),
-                           fill=champion_text, font=('Segoe UI', 10, 'bold'))
-        bounds = canvas.bbox('all')
-        if bounds:
-            canvas.configure(scrollregion=bounds)
-            self.root.after(50, self._fit_tournament_bracket)
+                                fill=champion_fill, outline=colors['title'], width=2)
+        write(1000, champion_y - 16, '♛', (TEXT_FONT, 20, 'normal'), card_width, fill=colors['title'])
+        write(1000, champion_y + card_height / 2, champion, (TEXT_FONT, 10, 'bold'), card_width - 20,
+              fill=champion_text)
+        self._fit_tournament_bracket()
 
     def _on_tournament_tab_changed(self, _event=None):
         selected_tab = self.tournament_tabs.index('current')
@@ -1578,34 +1727,51 @@ class CharacterApp:
         if hasattr(self, 'tournament_stage_label'):
             self.tournament_stage_label.configure(text=stage_names[selected_tab])
         if selected_tab == 0:
-            self.root.after_idle(self._fit_tournament_bracket)
+            self.root.after_idle(self._refit_tournament_bracket)
 
     def _fit_tournament_bracket(self):
+        """«Вписать в окно»: fit the bracket to its view and keep it fitted while the window changes size."""
+        self.bracket_auto_fit = True
+        self._refit_tournament_bracket()
+
+    def _refit_tournament_bracket(self, _event=None):
+        """Fit the bracket to its view again, unless the player has zoomed it by hand."""
         if not hasattr(self, 'bracket_canvas') or not self.bracket_canvas.winfo_exists():
             return
-        if self.tournament_tabs.index('current') != 0:
+        canvas = self.bracket_canvas
+        bounds = canvas.bbox('all')
+        # Until the page is laid out the canvas is 1x1; its first <Configure> calls this again.
+        if not bounds or canvas.winfo_width() <= 1 or self.tournament_tabs.index('current') != 0:
             return
+        if not getattr(self, 'bracket_auto_fit', False):
+            self._update_bracket_scrollregion()
+            return
+        view_width, view_height = self._bracket_view_size()
+        base_width = (bounds[2] - bounds[0]) / self.bracket_zoom
+        base_height = (bounds[3] - bounds[1]) / self.bracket_zoom
+        low, high = BRACKET_ZOOM_LIMITS
+        target_zoom = max(low, min(high, (view_width - 4) / base_width, (view_height - 4) / base_height))
+        self._scale_tournament_bracket(0, 0, target_zoom / self.bracket_zoom)
+        canvas.xview_moveto(0)
+        canvas.yview_moveto(0)
+
+    def _bracket_view_size(self):
+        """Width and height of the visible part of the bracket canvas, inside its border."""
+        canvas = self.bracket_canvas
+        border = 2 * int(canvas['highlightthickness'])
+        return max(1, canvas.winfo_width() - border), max(1, canvas.winfo_height() - border)
+
+    def _update_bracket_scrollregion(self):
+        """Let the view scroll over the whole bracket; a bracket smaller than the view sits in its middle."""
         canvas = self.bracket_canvas
         bounds = canvas.bbox('all')
         if not bounds:
             return
-        content_width = max(1, bounds[2] - bounds[0])
-        content_height = max(1, bounds[3] - bounds[1])
-        viewport_width = max(1, canvas.winfo_width() - 8)
-        viewport_height = max(1, canvas.winfo_height() - 8)
-        current_zoom = max(0.01, getattr(self, 'bracket_zoom', 1.0))
-        base_width = content_width / current_zoom
-        base_height = content_height / current_zoom
-        target_zoom = min(1.0, viewport_width / base_width, viewport_height / base_height)
-        target_zoom = max(0.25, target_zoom)
-        factor = target_zoom / current_zoom
-        canvas.scale('all', 0, 0, factor, factor)
-        self.bracket_zoom = target_zoom
-        bounds = canvas.bbox('all')
-        if bounds:
-            canvas.configure(scrollregion=bounds)
-        canvas.xview_moveto(0)
-        canvas.yview_moveto(0)
+        left, top, right, bottom = bounds
+        view_width, view_height = self._bracket_view_size()
+        spare_x = max(0, view_width - (right - left)) / 2
+        spare_y = max(0, view_height - (bottom - top)) / 2
+        canvas.configure(scrollregion=(left - spare_x, top - spare_y, right + spare_x, bottom + spare_y))
 
     def _pan_tournament_bracket_key(self, event):
         if event.keysym == 'Left':
@@ -1621,17 +1787,26 @@ class CharacterApp:
     def _zoom_tournament_bracket(self, factor):
         if not hasattr(self, 'bracket_canvas') or not self.bracket_canvas.winfo_exists():
             return
-        next_zoom = getattr(self, 'bracket_zoom', 1.0) * factor
-        if not 0.25 <= next_zoom <= 2.4:
+        low, high = BRACKET_ZOOM_LIMITS
+        if not low <= self.bracket_zoom * factor <= high:
             return
+        self.bracket_auto_fit = False
         canvas = self.bracket_canvas
         anchor_x = canvas.canvasx(max(1, canvas.winfo_width()) / 2)
         anchor_y = canvas.canvasy(max(1, canvas.winfo_height()) / 2)
-        canvas.scale('all', anchor_x, anchor_y, factor, factor)
-        self.bracket_zoom = next_zoom
-        bounds = canvas.bbox('all')
-        if bounds:
-            canvas.configure(scrollregion=bounds)
+        self._scale_tournament_bracket(anchor_x, anchor_y, factor)
+
+    def _scale_tournament_bracket(self, x, y, factor):
+        """Scale the bracket around (x, y). Tk scales only shapes, so the text is resized here too."""
+        canvas = self.bracket_canvas
+        canvas.scale('all', x, y, factor, factor)
+        self.bracket_zoom *= factor
+        for item, (text, family, pixels, weight, width) in self.bracket_texts.items():
+            # Rounded down, a text never outgrows its card, so a name that fits once fits at every zoom.
+            font = (family, -max(1, math.floor(pixels * self.bracket_zoom + 1e-6)), weight)
+            # Tiny fonts still come out wider than their share, so the text is fitted again.
+            canvas.itemconfigure(item, font=font, text=fit_text(text, font, width * self.bracket_zoom))
+        self._update_bracket_scrollregion()
 
     def _on_bracket_wheel(self, event, touchpad):
         """The wheel and two-finger scrolling pan the bracket; Shift pans sideways."""
@@ -1795,14 +1970,17 @@ class CharacterApp:
             for column in (0, 1):
                 row.columnconfigure(column, weight=1, uniform='fighter')
         else:
-            left.pack(side='left', fill='y', expand=True, padx=(0, 8))
-            center.pack(side='left', fill='y')
-            right.pack(side='left', fill='y', expand=True, padx=(8, 0))
+            # The fighters keep the width of their cards; the arena between them takes what is left,
+            # so a narrow window shrinks its history table instead of cutting off the second fighter.
+            left.grid(row=0, column=0, sticky='ns', padx=(0, 8))
+            center.grid(row=0, column=1, sticky='nsew')
+            right.grid(row=0, column=2, sticky='ns', padx=(8, 0))
+            row.columnconfigure(1, weight=1)
         if ladder_mode:
             fighter_name_style = {
                 'background': self.ui_colors['surface'],
                 'foreground': self.ui_colors['foreground'],
-                'font': ('Segoe UI', 10, 'bold'),
+                'font': (TEXT_FONT, 10, 'bold'),
                 'anchor': 'center',
             }
             tk.Label(left, text=names[0], **fighter_name_style).pack(fill='x', padx=3, pady=(1, 3))
@@ -1826,14 +2004,14 @@ class CharacterApp:
         self.fight_panels = (left, right)
         self.fight_outcome_labels = []
         for panel in (left, right):
-            outcome = tk.Label(panel, text='', font=('Segoe UI', 10, 'bold'),
+            outcome = tk.Label(panel, text='', font=(TEXT_FONT, 10, 'bold'),
                                background=self.ui_colors['arena_fill'],
                                foreground=self.ui_colors['arena_text'])
             outcome.pack(fill='x', pady=(4, 0))
             outcome.pack_forget()
             self.fight_outcome_labels.append(outcome)
             portrait = tk.Canvas(panel, width=130, height=195, highlightthickness=0,
-                                 background=self.ui_colors['surface'])
+                                 background=self.ui_colors['background'])
             portrait.pack(pady=(6, 0))
             self.fight_portrait_canvases.append(portrait)
             card = tk.Frame(panel, background=self.ui_colors['fight_card'], highlightthickness=1,
@@ -1843,11 +2021,12 @@ class CharacterApp:
         if not ladder_mode:
             self.first_fighter.bind('<<ComboboxSelected>>', lambda _event: self._on_fight_selection_changed(0))
             self.second_fighter.bind('<<ComboboxSelected>>', lambda _event: self._on_fight_selection_changed(1))
-        self.fight_status = ttk.Label(center, text='', anchor='center')
+        wheel_size = int(280 * self._wheel_scale(600, 640))
+        # Long announcements wrap to the width of the wheel below.
+        self.fight_status = ttk.Label(center, text='', anchor='center', justify='center', wraplength=wheel_size)
         self.fight_status.pack(fill='x', pady=(0, 4))
-        wheel_scale = self._wheel_scale(600, 640)
-        self.fight_wheel = tk.Canvas(center, width=int(280 * wheel_scale), height=int(280 * wheel_scale),
-                                     highlightthickness=0, background=self.ui_colors['surface'])
+        self.fight_wheel = tk.Canvas(center, width=wheel_size, height=wheel_size,
+                                     highlightthickness=0, background=self.ui_colors['background'])
         self.fight_wheel.pack(pady=(0, 6))
         self._draw_fight_wheel(names[0], names[1], 0)
         self.fight_button = ttk.Button(center, text='Начать сражение',
@@ -1858,9 +2037,11 @@ class CharacterApp:
             history_frame, columns=('round', 'attribute', 'score', 'winner'),
             show='headings', height=max(2, min(3, int(4 * page_scale))), selectmode='none',
         )
+        # Narrow starting widths: a treeview stretches its columns to fill a wider window but never shrinks
+        # them below these, so wide ones would be cut off in a narrow window.
         for column, title, width in (
-            ('round', 'Раунд', 70), ('attribute', 'Параметр', 240),
-            ('score', 'Очки + удача', 120), ('winner', 'Победитель', 220),
+            ('round', 'Раунд', 66), ('attribute', 'Параметр', 170),
+            ('score', 'Очки + удача', 120), ('winner', 'Победитель', 150),
         ):
             self.fight_history.heading(column, text=title)
             self.fight_history.column(column, width=width, minwidth=60, anchor='center',
@@ -1869,7 +2050,7 @@ class CharacterApp:
         self.fight_button.pack()
         self.fight_history.tag_configure('first-wins', foreground=self.ui_colors['victory_text'])
         self.fight_history.tag_configure('second-wins', foreground=self.ui_colors['defeat_text'])
-        self.fight_history.tag_configure('total', font=('Segoe UI', 9, 'bold'))
+        self.fight_history.tag_configure('total', font=(TEXT_FONT, 9, 'bold'))
         self._draw_fight_portrait(0)
         self._draw_fight_portrait(1)
 
@@ -1903,7 +2084,7 @@ class CharacterApp:
         main_fg = self.ui_colors['fight_card_text']
         muted_fg = self.ui_colors['gold_text']
         tk.Label(stats_card, text='ХАРАКТЕРИСТИКИ',
-                 font=('Segoe UI', 10, 'bold'), bg=card_bg, fg=muted_fg,
+                 font=(TITLE_FONT, 10), bg=card_bg, fg=muted_fg,
                  anchor='center').pack(fill='x', padx=4, pady=(5, 3))
         stat_fields = (
             ('Очки', 'points'),
@@ -1916,22 +2097,28 @@ class CharacterApp:
             ('Чары', 'weapon_enchantment'),
             ('Способность', 'ability'), ('Титул', 'title'),
         )
+        # Every fighter gets the same rows, columns and row heights, so changing one never shifts the page.
+        label_font, value_font = (TEXT_FONT, 9, 'bold'), (TEXT_FONT, 9)
+        label_width = max(tkfont.Font(font=label_font).measure(text) for text, _key in stat_fields) + 6
+        value_width = tkfont.Font(font=value_font).measure('0') * FIGHT_CARD_VALUE_CHARS
         for label_text, key in stat_fields:
-            value = properties.get(key, '')
+            value = properties.get(key, '').strip()
             if not value or value.casefold() == 'none':
-                continue
+                value = '—'
+            lines = 2 if key in FIGHT_CARD_TWO_LINE_STATS else 1
             row = tk.Frame(
                 stats_card, bg=card_bg, padx=7, pady=4, highlightthickness=1,
                 highlightbackground=self.ui_colors['border'],
             )
             row.pack(fill='x', padx=3, pady=2)
-            row.grid_columnconfigure(1, weight=1)
-            tk.Label(row, text=label_text, font=('Segoe UI', 9, 'bold'),
-                     bg=card_bg, fg=muted_fg, anchor='w').grid(
-                         row=0, column=0, sticky='w', padx=(0, 6))
-            tk.Label(row, text=value, font=('Segoe UI', 9), bg=card_bg,
-                     fg=main_fg, justify='right', anchor='e', wraplength=120).grid(
-                         row=0, column=1, sticky='e')
+            row.grid_columnconfigure(0, minsize=label_width)
+            row.grid_columnconfigure(1, weight=1, minsize=value_width)
+            # No inner padding: a label is exactly as wide as its text, so the columns never stretch.
+            tk.Label(row, text=label_text, font=label_font, bd=0, padx=0,
+                     bg=card_bg, fg=muted_fg, anchor='w').grid(row=0, column=0, sticky='w')
+            tk.Label(row, text=value if lines == 2 else fit_text(value, value_font, value_width),
+                     font=value_font, bd=0, padx=0, bg=card_bg, fg=main_fg, justify='right', anchor='e',
+                     wraplength=value_width, height=lines).grid(row=0, column=1, sticky='e')
 
         if self.fight_ladder_mode and fighter_index == 1:
             self._draw_ladder_villain_portrait(canvas, fighter_name, properties)
@@ -1995,7 +2182,7 @@ class CharacterApp:
         if image is None:
             canvas.create_text(
                 65, 97, text=f'{fighter_name}\n\nПортрет не найден:\n{image_reference}',
-                width=120, fill=foreground, font=('Segoe UI', 8),
+                width=120, fill=foreground, font=(TEXT_FONT, 8),
             )
             return
         canvas.create_image(65, 97, image=image, anchor='center')
@@ -2048,7 +2235,7 @@ class CharacterApp:
         if not self.fight_ladder_mode:
             self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
         self.fight_history.delete(*self.fight_history.get_children())
-        self.fight_status.configure(style='TLabel', wraplength=0)
+        self.fight_status.configure(style='TLabel')
         self._reset_fight_panels()
         self._spin_fight_round()
 
@@ -2063,26 +2250,21 @@ class CharacterApp:
         second_points = max(0, second_points)
         total_points = first_points + second_points
         first_extent = 180 if total_points == 0 else 360 * first_points / total_points
-        canvas.create_oval(cx-radius-4, cy-radius-4, cx+radius+4, cy+radius+4,
-                           fill='#263448', outline='')
         second_extent = 360 - first_extent
+        # The first fighter's half is azure, the second one's gules.
+        (first_fill, first_ink), (second_fill, second_ink) = TINCTURES[1], TINCTURES[0]
         canvas.create_arc(*box, start=rotation, extent=first_extent,
-                          fill='#56b4d3', outline='#f7f8fa', width=4)
+                          fill=first_fill, outline=GILT, width=3)
         canvas.create_arc(*box, start=rotation + first_extent, extent=second_extent,
-                          fill='#f08a70', outline='#f7f8fa', width=4)
-        for angle, label in ((rotation + first_extent / 2, first_name),
-                             (rotation + first_extent + second_extent / 2, second_name)):
+                          fill=second_fill, outline=GILT, width=3)
+        for angle, label, ink in ((rotation + first_extent / 2, first_name, first_ink),
+                                  (rotation + first_extent + second_extent / 2, second_name, second_ink)):
             radians = math.radians(angle)
             x = cx + math.cos(radians) * radius * 0.56
             y = cy - math.sin(radians) * radius * 0.56
             canvas.create_text(x, y, text=textwrap.fill(label, 16), width=110,
-                              font=('Segoe UI', 10, 'bold'), fill='#17212b', justify='center')
-        canvas.create_oval(cx-22, cy-22, cx+22, cy+22, fill='#263448', outline='#f7f8fa', width=3)
-        canvas.create_oval(cx-8, cy-8, cx+8, cy+8, fill='#f7f8fa', outline='')
-        canvas.create_polygon(cx-16, cy-radius-23, cx+16, cy-radius-23, cx, cy-radius+5,
-                              fill='#263448', outline='#f7f8fa', width=2)
-        canvas.create_polygon(cx-10, cy-radius-19, cx+10, cy-radius-19, cx, cy-radius-1,
-                              fill='#f4c95d', outline='')
+                              font=(TEXT_FONT, 10, 'bold'), fill=ink, justify='center')
+        self._draw_wheel_fittings(canvas, cx, cy, radius)
 
     def _fight_card_default_colors(self):
         """Background, border and row border of a fighter's stats card at rest."""
@@ -2178,12 +2360,9 @@ class CharacterApp:
                 self._paint_fight_card(index, background, color, color)
                 portrait.configure(highlightthickness=3, highlightbackground=color)
             self.style.configure('FightWinner.TLabel', background=colors['win_fill'],
-                                 foreground=colors['win_text'], font=('Segoe UI', 14, 'bold'),
+                                 foreground=colors['win_text'], font=(TITLE_FONT, 15),
                                  padding=(10, 8))
-            self.fight_status.configure(
-                text=f'✦ ПОБЕДИТЕЛЬ: {winner} ✦', style='FightWinner.TLabel',
-                wraplength=270, justify='center',
-            )
+            self.fight_status.configure(text=f'✦ ПОБЕДИТЕЛЬ: {winner} ✦', style='FightWinner.TLabel')
             if self.fight_ladder_mode:
                 if winner_index == 1:
                     # The lost fight is heard at once; the run-level cue comes with the dialog.
@@ -2196,10 +2375,7 @@ class CharacterApp:
                     self.audio.play_effect('ladder_battle_win')
                     self._save_ladder_run_progress(fight_result='Победа')
                     next_villain = self.ladder_villains[self.ladder_index + 1].stem
-                    self.fight_status.configure(
-                        text=f'ПОБЕДА! Следующий соперник: {next_villain}',
-                        wraplength=270, justify='center',
-                    )
+                    self.fight_status.configure(text=f'ПОБЕДА! Следующий соперник: {next_villain}')
                     self.fight_button.configure(
                         text='Следующий бой', command=self._advance_ladder_fight, state='normal',
                     )
@@ -2315,12 +2491,12 @@ class CharacterApp:
         self.wheel_status = ttk.Label(wheel_panel, text='Каждый атрибут выбирается отдельно.',
                                        anchor='center', style='Muted.TLabel')
         self.wheel_status.pack(fill='x', pady=(0, 2))
-        self.wheel_selection = ttk.Label(wheel_panel, text='', anchor='center', font=('Segoe UI', 11, 'bold'))
+        self.wheel_selection = ttk.Label(wheel_panel, text='', anchor='center', font=(TEXT_FONT, 11, 'bold'))
         self.wheel_selection.pack(fill='x', pady=(0, 5))
         wheel_size = int(390 * self._wheel_scale(920, 850))
         self.wheel_canvas = tk.Canvas(
-            wheel_panel, width=wheel_size, height=wheel_size, highlightthickness=1,
-            highlightbackground=self.ui_colors['border'], background=self.ui_colors['surface'],
+            wheel_panel, width=wheel_size, height=wheel_size, highlightthickness=0,
+            background=self.ui_colors['background'],
         )
         self.wheel_canvas.pack(pady=4)
         self._draw_wheel(data.substory_sum, 0)
@@ -2342,8 +2518,8 @@ class CharacterApp:
         name_card.pack(fill='x', pady=(0, 5))
         self.create_summary_name = tk.Label(
             name_card, text='Новый герой',
-            bg=self.ui_colors['surface'], fg=self.ui_colors['foreground'],
-            font=('Segoe UI', 12, 'bold'), wraplength=210, anchor='w', justify='left',
+            bg=self.ui_colors['surface'], fg=self.ui_colors['title'],
+            font=(TITLE_FONT, 13), wraplength=210, anchor='w', justify='left',
         )
         self.create_summary_name.pack(fill='x')
         for label, key in (
@@ -2362,11 +2538,11 @@ class CharacterApp:
             row.pack(fill='x', pady=2)
             row.grid_columnconfigure(1, weight=1)
             tk.Label(row, text=label, anchor='w', background=self.ui_colors['surface'],
-                     foreground=self.ui_colors['muted'], font=('Segoe UI', 9, 'bold')).grid(
+                     foreground=self.ui_colors['muted'], font=(TEXT_FONT, 9, 'bold')).grid(
                          row=0, column=0, sticky='w', padx=(0, 6))
             value_label = tk.Label(row, text='—', anchor='e', justify='right',
                                    background=self.ui_colors['surface'], foreground=self.ui_colors['foreground'],
-                                   font=('Segoe UI', 9, 'bold'), wraplength=125)
+                                   font=(TEXT_FONT, 9, 'bold'), wraplength=125)
             value_label.grid(row=0, column=1, sticky='e')
             self.create_summary_rows[key] = value_label
         self.name_entry.focus_set()
@@ -2449,35 +2625,36 @@ class CharacterApp:
         height = int(canvas['height'])
         center_x, center_y = width / 2, height / 2
         radius = min(width, height) / 2 - 30
-        colors = ('#f4b860', '#4cae9b', '#6daedb', '#ef8068', '#9277c7',
-                  '#e67fa2', '#67b9c2', '#dd9b55', '#77a86b')
         weights = list(weights) if weights is not None else [1] * len(options)
         total_weight = sum(weights)
         angle_before = 0.0
         for index, (option, weight) in enumerate(zip(options, weights)):
             segment = 360 * weight / total_weight
             start = (rotation + angle_before) % 360
+            fill, ink = TINCTURES[index % len(TINCTURES)]
             canvas.create_arc(center_x-radius, center_y-radius, center_x+radius, center_y+radius,
-                              start=start, extent=segment, fill=colors[index % len(colors)],
-                              outline='#fffaf1', width=3)
+                              start=start, extent=segment, fill=fill, outline=GILT, width=2)
             middle = math.radians(start + segment / 2)
             label_radius = radius * 0.66
             x = center_x + math.cos(middle) * label_radius
             y = center_y - math.sin(middle) * label_radius
             label = textwrap.fill(str(option), width=17)
-            canvas.create_text(x, y, text=label, width=105, font=('Segoe UI', 8, 'bold'),
-                               fill='#202a35', justify='center')
+            canvas.create_text(x, y, text=label, width=105, font=(TEXT_FONT, 8, 'bold'),
+                               fill=ink, justify='center')
             angle_before += segment
-        canvas.create_oval(center_x-radius-4, center_y-radius-4, center_x+radius+4, center_y+radius+4,
-                           outline='#263448', width=3)
-        canvas.create_oval(center_x-25, center_y-25, center_x+25, center_y+25,
-                           fill='#263448', outline='#fffaf1', width=3)
-        canvas.create_oval(center_x-10, center_y-10, center_x+10, center_y+10,
-                           fill='#f4c95d', outline='')
-        canvas.create_polygon(center_x-17, center_y-radius-24, center_x+17, center_y-radius-24,
-                              center_x, center_y-radius+7, fill='#263448', outline='#fffaf1', width=2)
-        canvas.create_polygon(center_x-10, center_y-radius-19, center_x+10, center_y-radius-19,
-                              center_x, center_y-radius, fill='#f4c95d', outline='')
+        self._draw_wheel_fittings(canvas, center_x, center_y, radius)
+
+    @staticmethod
+    def _draw_wheel_fittings(canvas, x, y, radius):
+        """The oak rim, the hub and the pointer at the top, the same on every wheel."""
+        canvas.create_oval(x - radius - 4, y - radius - 4, x + radius + 4, y + radius + 4, outline=WOOD, width=7)
+        canvas.create_oval(x - radius - 8, y - radius - 8, x + radius + 8, y + radius + 8, outline=GILT, width=2)
+        canvas.create_oval(x - 24, y - 24, x + 24, y + 24, fill=WOOD, outline=GILT, width=3)
+        canvas.create_oval(x - 9, y - 9, x + 9, y + 9, fill=GILT, outline='')
+        canvas.create_polygon(x - 17, y - radius - 24, x + 17, y - radius - 24, x, y - radius + 6,
+                              fill=WOOD, outline=GILT, width=2)
+        canvas.create_polygon(x - 10, y - radius - 19, x + 10, y - radius - 19, x, y - radius,
+                              fill=GILT, outline='')
 
     def _wheel_index_at_pointer(self, weights, rotation):
         pointer_angle = (90 - rotation) % 360
@@ -2695,7 +2872,7 @@ class CharacterApp:
         gallery_area.pack(fill='both', expand=True)
         colors = self.ui_colors
         self.gallery_canvas = tk.Canvas(gallery_area, highlightthickness=0,
-                                        background=colors['surface'])
+                                        background=colors['background'])
         self._attach_scrollbar(self.gallery_canvas)
         self._bind_mousewheel((self.gallery_canvas, gallery_area),
                               lambda event, touchpad: self._on_wheel(self.gallery_canvas, event, touchpad))
@@ -2704,12 +2881,12 @@ class CharacterApp:
         preview = ttk.LabelFrame(body, text='Предпросмотр', padding=10)
         preview.pack(side='right', fill='y', padx=(14, 0))
         self.card_canvas = tk.Canvas(preview, width=300, height=450,
-                                     highlightthickness=0, background=colors['surface'])
+                                     highlightthickness=0, background=colors['background'])
         self.card_canvas.pack(pady=(0, 6))
         detail_frame = ttk.Frame(preview)
         detail_frame.pack(fill='both', expand=True)
         self.detail = tk.Canvas(detail_frame, width=300, highlightthickness=0,
-                                background=colors['input'])
+                                background=colors['background'])
         self._attach_scrollbar(self.detail)
         if ladder_selection:
             self.ladder_start_button = ttk.Button(
@@ -2745,7 +2922,7 @@ class CharacterApp:
         }
         skin, hair, accent = palettes[kind]
         canvas.create_oval(x + 2, y + 2, x + 34, y + 34, fill=self.ui_colors['surface'],
-                           outline=self.ui_colors['border'], width=1, tags=(tag,))
+                           outline=self.ui_colors['frame_border'], width=1, tags=(tag,))
         if kind == 'elf':
             canvas.create_polygon(x + 7, y + 17, x + 1, y + 11, x + 8, y + 12,
                                   fill=skin, outline=hair, tags=(tag,))
@@ -2764,9 +2941,9 @@ class CharacterApp:
         canvas.create_arc(x + 7, y + 5, x + 29, y + 24, start=0, extent=180,
                           style='pieslice', fill=hair, outline=hair, tags=(tag,))
         canvas.create_oval(x + 13, y + 17, x + 15, y + 19,
-                           fill='#263448', outline='', tags=(tag,))
+                           fill=WOOD, outline='', tags=(tag,))
         canvas.create_oval(x + 21, y + 17, x + 23, y + 19,
-                           fill='#263448', outline='', tags=(tag,))
+                           fill=WOOD, outline='', tags=(tag,))
         canvas.create_line(x + 15, y + 24, x + 21, y + 24,
                            fill=hair, width=1, tags=(tag,))
         if kind == 'orc':
@@ -2900,7 +3077,7 @@ class CharacterApp:
         if not self.visible_files:
             canvas.create_text(
                 canvas_width / 2, 24, text='Ничего не найдено',
-                fill=self.ui_colors['muted'], font=('Segoe UI', 10), anchor='center',
+                fill=self.ui_colors['muted'], font=(TEXT_FONT, 10), anchor='center',
             )
             canvas.configure(scrollregion=(0, 0, canvas_width, 48))
             return
@@ -2932,7 +3109,7 @@ class CharacterApp:
                 canvas.create_text(
                     x + 54, y + 9, text=path.stem, anchor='nw',
                     width=max(40, tile_width - 64), fill=text_color,
-                    font=('Segoe UI', 9, 'bold'), tags=(tag,),
+                    font=(TEXT_FONT, 9, 'bold'), tags=(tag,),
                 )
                 race = ' '.join(filter(None, (props.get('subrace', ''), props.get('race', ''))))
                 canvas.create_text(
@@ -2940,7 +3117,7 @@ class CharacterApp:
                     text='\n'.join(value for value in (race, props.get('size', '')) if value), anchor='nw',
                     width=max(50, tile_width - 20),
                     fill=colors['dead_text'] if is_dead else colors['muted'],
-                    font=('Segoe UI', 8), tags=(tag,),
+                    font=(TEXT_FONT, 8), tags=(tag,),
                 )
                 points = props.get('points', '0').strip() or '0'
                 badge_width = min(92, tile_width - 16)
@@ -2955,7 +3132,7 @@ class CharacterApp:
                 canvas.create_text(
                     (badge_left + x + tile_width - 8) / 2, badge_top + 10,
                     text='Мёртв' if is_dead else f'Очки: {points}', fill=text_color,
-                    font=('Segoe UI', 8, 'bold'), tags=(tag,),
+                    font=(TEXT_FONT, 8, 'bold'), tags=(tag,),
                 )
                 canvas.tag_bind(
                     tag, '<Button-1>',
@@ -2979,7 +3156,7 @@ class CharacterApp:
         colors = self.ui_colors
         is_dead = not Fight.is_character_alive(properties)
         dead_label = '#ffe8e9'
-        canvas.configure(background=colors['dead_fill'] if is_dead else colors['surface'])
+        canvas.configure(background=colors['dead_fill'] if is_dead else colors['background'])
         template_name = RACE_TEMPLATES.get(properties.get('race', '').casefold())
         photo = template_name and self._template_image(
             TEMPLATES_DIR / 'races' / f'{template_name}.png', 256, 384,
@@ -2991,7 +3168,7 @@ class CharacterApp:
         else:
             left, top = 12, 12
             canvas.create_rectangle(left, top, left + 256, top + 384,
-                                    fill='#263448', outline='#d3aa56', width=3)
+                                    fill=WOOD, outline=GILT, width=3)
 
         target_height = (160, 185, 210, 235)[SIZE_TIERS.get(properties.get('size', '').casefold(), 1)]
         figure = template_name and self._template_image(
@@ -3007,22 +3184,26 @@ class CharacterApp:
                                    target_height / 185)
             canvas.create_image(figure_x, figure_bottom, image=figure, anchor='s')
 
-        bar_background = colors['dead_bar'] if is_dead else '#17212b'
+        bar_background = colors['dead_bar'] if is_dead else '#1a120b'
         canvas.create_rectangle(left + 3, top + 4, left + 257, top + 60,
                                 fill=bar_background, outline='')
         canvas.create_rectangle(left + 3, top + 306, left + 257, top + 387,
                                 fill=bar_background, outline='')
 
-        def label(y, text, size=9, bold=False, width=224):
-            options = dict(text=text, width=width, justify='center',
-                           font=('Segoe UI', size, 'bold' if bold else 'normal'))
-            canvas.create_text(left + 130, top + y + 1, fill='#17191c', **options)
-            canvas.create_text(left + 129, top + y, fill=dead_label if is_dead else '#fff4d6', **options)
+        def label(y, text, size=9, bold=False, width=224, family=TEXT_FONT):
+            font = (family, size, 'bold' if bold else 'normal')
+            options = dict(text=fit_text(text, font, width), justify='center', font=font)
+            canvas.create_text(left + 130, top + y + 1, fill='#0d0906', **options)
+            canvas.create_text(left + 129, top + y, fill=dead_label if is_dead else PARCHMENT_TEXT, **options)
 
-        label(17, textwrap.shorten(properties.get('name', 'Новый персонаж'), 26), 12, True)
+        name = properties.get('name', 'Новый персонаж')
+        # A long name gets a smaller font before it gets cut.
+        name_size = next((size for size in (12, 11, 10)
+                          if tkfont.Font(font=(TITLE_FONT, size)).measure(name) <= 224), 9)
+        label(17, name, name_size, family=TITLE_FONT)
         race_line = ' '.join(filter(None, (properties.get('subrace'), properties.get('race'))))
-        label(39, 'Мёртв' if is_dead else textwrap.shorten(race_line, 32), 8, True)
-        label(315, textwrap.shorten(properties.get('title', ''), 32), 8, True)
+        label(39, 'Мёртв' if is_dead else race_line, 8, True)
+        label(315, properties.get('title', ''), 8, True)
         label(338, f"Рост: {properties.get('size', '—')}", 8, True)
         label(357, f"Оружие: {properties.get('weapon', '—')}", 8)
         label(376, self._card_ability_line(ability, properties.get('ability_power')), 8,
@@ -3038,14 +3219,12 @@ class CharacterApp:
     @staticmethod
     def _card_ability_line(ability, power):
         """Keep the ability name whole on the card; add its power only when it fits."""
-        card_font = tkfont.Font(family='Segoe UI', size=8)
-        candidates = [f'Способность: {ability}']
-        if power and power != 'None':
-            candidates.insert(0, f'Способность: {ability} · {power}')
-        for text in candidates:
-            if card_font.measure(text) <= CARD_ABILITY_WIDTH:
-                return text
-        return f'Способность: {textwrap.shorten(ability, 26)}'
+        card_font = (TEXT_FONT, 8)
+        text = f'Способность: {ability}'
+        with_power = f'{text} · {power}'
+        if power and power != 'None' and tkfont.Font(font=card_font).measure(with_power) <= CARD_ABILITY_WIDTH:
+            return with_power
+        return fit_text(text, card_font, CARD_ABILITY_WIDTH)
 
     def _draw_card_weapon(self, canvas, properties, hand_x, hand_y, size_factor):
         """The weapon picture, or a simple drawing of it when the picture file is missing."""
@@ -3132,7 +3311,7 @@ class CharacterApp:
         )
         canvas_width = max(300, self.detail.winfo_width())
         left, right, gap = 6, canvas_width - 6, 6
-        label_font = tkfont.Font(family='Segoe UI', size=11, weight='bold')
+        label_font = tkfont.Font(family=TEXT_FONT, size=11, weight='bold')
         y = 6
         for label, key in fields:
             raw_value = properties.get(key, '').strip()
@@ -3158,7 +3337,7 @@ class CharacterApp:
             value_right = right - action_width - gap - 6
             self.detail.create_text(
                 value_right, y + row_height / 2, text=value, anchor='e',
-                width=value_width, fill=self.ui_colors['foreground'], font=('Segoe UI', 12),
+                width=value_width, fill=self.ui_colors['foreground'], font=(TEXT_FONT, 12),
             )
             if show_upgrade:
                 cost = upgrade_cost(key, properties.get(key, ''))
@@ -3171,17 +3350,17 @@ class CharacterApp:
                 action_left = right - action_width - 4
                 action_right = right - 4
                 action_tag = f'upgrade_{key}'
-                action_fill = '#f2c94c' if can_upgrade else self.ui_colors['input']
-                action_text_fill = '#493700' if can_upgrade else self.ui_colors['muted']
+                action_fill = self.ui_colors['accent'] if can_upgrade else self.ui_colors['input']
+                action_text_fill = self.ui_colors['on_accent'] if can_upgrade else self.ui_colors['muted']
                 self.detail.create_rectangle(
                     action_left, y + 7, action_right, bottom - 7,
-                    fill=action_fill, outline='#d6a300' if can_upgrade else self.ui_colors['border'],
+                    fill=action_fill, outline=self.ui_colors['title'] if can_upgrade else self.ui_colors['border'],
                     tags=(action_tag,),
                 )
                 self.detail.create_text(
                     (action_left + action_right) / 2, y + row_height / 2,
                     text=action_text, fill=action_text_fill,
-                    font=('Segoe UI', 10, 'bold'), tags=(action_tag,),
+                    font=(TEXT_FONT, 10, 'bold'), tags=(action_tag,),
                 )
                 if can_upgrade:
                     self.detail.tag_bind(action_tag, '<Button-1>',
@@ -3214,6 +3393,7 @@ def configure_logging():
 
 def run():
     configure_logging()
+    load_bundled_fonts()
     root = tk.Tk()
     root.report_callback_exception = lambda *exc_info: logger.error(
         'Необработанная ошибка в интерфейсе', exc_info=exc_info,
