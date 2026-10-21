@@ -20,6 +20,25 @@ def run_tournament(character_paths):
         raise ValueError('В ростере есть повторяющиеся персонажи.')
 
     characters = {path: Fight.load_character(path) for path in paths}
+
+    def name_of(path):
+        return characters[path].get('name', path.stem)
+
+    def play_match(first, second):
+        result = Fight.play(first, second)
+        winner = result['winner_path']
+        return winner, {
+            'first': name_of(first),
+            'second': name_of(second),
+            'winner': name_of(winner),
+            'first_score': result['first_total'],
+            'second_score': result['second_total'],
+        }
+
+    def match_line(match):
+        return (f"{match['first']} против {match['second']} -> {match['winner']} "
+                f"({match['first_score']}:{match['second_score']})")
+
     groups = [[] for _ in range(GROUP_COUNT)]
     # Deal players across groups evenly while preserving the selected roster order.
     for index, path in enumerate(paths):
@@ -51,7 +70,7 @@ def run_tournament(character_paths):
                 table[path]['wins'],
                 table[path]['for'] - table[path]['against'],
                 table[path]['for'],
-                characters[path].get('name', path.stem).casefold(),
+                name_of(path).casefold(),
             ),
             reverse=True,
         )
@@ -59,7 +78,7 @@ def run_tournament(character_paths):
         report.extend(['', f'Группа {group_name} - таблица:'])
         for rank, path in enumerate(ranked, start=1):
             stats = table[path]
-            name = characters[path].get('name', path.stem)
+            name = name_of(path)
             group_table.append({
                 'rank': rank,
                 'name': name,
@@ -74,80 +93,38 @@ def run_tournament(character_paths):
         group_standings.append({'name': group_name, 'standings': group_table})
         qualifiers.extend(ranked[:ADVANCE_PER_GROUP])
 
+    def play_round(title, label, pairs):
+        report.append(title)
+        winners, matches = [], []
+        for index, (first, second) in enumerate(pairs, start=1):
+            winner, match = play_match(first, second)
+            winners.append(winner)
+            matches.append(match)
+            report.append(f'  {label}{index}: {match_line(match)}')
+        return winners, matches
+
     report.extend(['', 'СЕТКА ПЛЕЙ-ОФФ'])
-    quarterfinal_pairs = (
+    quarter_winners, quarterfinals = play_round('Четвертьфинал:', 'ЧФ', (
         (qualifiers[0], qualifiers[3]),
         (qualifiers[2], qualifiers[1]),
         (qualifiers[4], qualifiers[7]),
         (qualifiers[6], qualifiers[5]),
-    )
-    quarter_winners = []
-    quarterfinals = []
-    report.append('Четвертьфинал:')
-    for index, (first, second) in enumerate(quarterfinal_pairs, start=1):
-        result = Fight.play(first, second)
-        winner = result['winner_path']
-        quarter_winners.append(winner)
-        quarterfinals.append({
-            'first': characters[first].get('name', first.stem),
-            'second': characters[second].get('name', second.stem),
-            'winner': characters[winner].get('name', winner.stem),
-            'first_score': result['first_total'],
-            'second_score': result['second_total'],
-        })
-        report.append(
-            f'  ЧФ{index}: {characters[first].get("name", first.stem)} '
-            f'против {characters[second].get("name", second.stem)} '
-            f'-> {characters[winner].get("name", winner.stem)} '
-            f'({result["first_total"]}:{result["second_total"]})'
-        )
-
-    semifinal_pairs = ((quarter_winners[0], quarter_winners[1]), (quarter_winners[2], quarter_winners[3]))
-    semifinal_winners = []
-    semifinals = []
-    report.append('Полуфинал:')
-    for index, (first, second) in enumerate(semifinal_pairs, start=1):
-        result = Fight.play(first, second)
-        winner = result['winner_path']
-        semifinal_winners.append(winner)
-        semifinals.append({
-            'first': characters[first].get('name', first.stem),
-            'second': characters[second].get('name', second.stem),
-            'winner': characters[winner].get('name', winner.stem),
-            'first_score': result['first_total'],
-            'second_score': result['second_total'],
-        })
-        report.append(
-            f'  ПФ{index}: {characters[first].get("name", first.stem)} '
-            f'против {characters[second].get("name", second.stem)} '
-            f'-> {characters[winner].get("name", winner.stem)} '
-            f'({result["first_total"]}:{result["second_total"]})'
-        )
-
-    first, second = semifinal_winners
-    final_result = Fight.play(first, second)
-    champion = final_result['winner_path']
+    ))
+    semifinal_winners, semifinals = play_round('Полуфинал:', 'ПФ', (
+        (quarter_winners[0], quarter_winners[1]), (quarter_winners[2], quarter_winners[3]),
+    ))
+    champion, final = play_match(*semifinal_winners)
     champion_points = Fight.change_points(champion, 50)
-    final = {
-        'first': characters[first].get('name', first.stem),
-        'second': characters[second].get('name', second.stem),
-        'winner': characters[champion].get('name', champion.stem),
-        'first_score': final_result['first_total'],
-        'second_score': final_result['second_total'],
-    }
     report.extend([
         'Финал:',
-        f'  {characters[first].get("name", first.stem)} '
-        f'против {characters[second].get("name", second.stem)} '
-        f'-> {characters[champion].get("name", champion.stem)} '
-        f'({final_result["first_total"]}:{final_result["second_total"]})',
+        f'  {match_line(final)}',
         '',
-        f'ПОБЕДИТЕЛЬ: {characters[champion].get("name", champion.stem)}',
+        f'ПОБЕДИТЕЛЬ: {final["winner"]}',
         '',
         'Формат: 4 группы, по 2 лучших из каждой выходят в четвертьфинал.',
     ])
     return {
-        'winner': characters[champion].get('name', champion.stem),
+        'winner': final['winner'],
         'report': '\n'.join(report),
         'groups': groups,
         'champion_path': champion,

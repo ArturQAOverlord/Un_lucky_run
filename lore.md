@@ -1,33 +1,29 @@
-# Annales Cursus Infelicis
+# Среди путей опасных
 
-## Prooemium: Mundus Sine Certitudine
+## Приветствую, странник!
 
-Ante memoriam hominum, mundus iam exstitit, sed historia nondum coeperat. Regna sine regibus iacebant, arma sine dominis fulgebant, et viae ad arenas per terras vacuas ducebant. Tum **Fortuna** et **Chaos**, duae vires antiquae, super orbem conspexerunt atque inter se certaverunt: utra vim maiorem haberet, ordo an casus.
+Иль не странник ты вовсе и знал, куда путь держишь, может из этих краев и слышал, в ком королевство так нуждается? А ежели забрел ты сюда неведымыми путями да дорогами, да желаешь знать для чего ты здесь - присядь да услышь мои слова.
 
-Fortuna sortes iactavit; Chaos risit. Ex illo certamine nata est *Ludus Magna*, arena sine finibus, cuius portae ad omnia regna patebant. In ea nemo victoriam certam habet, neque clades semper finem significat. Quisque pugnat, quisque mutatur, et ipsa victoria novum periculum parit.
+Король твой направил тебе меня, мелкого да неказистого, уродивого, что хоть такой работою может монетку заработать, обучили меня люди добрые чтению да грамоте, а как шутом быть чай жизнь показала, да и добротою и злобою мужей наших служу я милости государева, и тебе служить положено.
 
-## Heroes Ex Sortibus Nati
+Ранее в пути своем видел пожалуй странные да и пугающие вещи ты, может слышал о чем таком, о чем слышать не стоило, но дорога и без того нелегка была твоя, и знание это тебе применить необходимо. Есть ли кто дорогой для тебя али кому жизнью обязан? Может долги имеешь перед кем? Один долг у тебя точно есть, раз ты здесь оказался. 
 
-Per saecula, e diversis gentibus bellatores ad Ludum venerunt. Inter eos homines, dryades, orcini, et populi quorum nomina libris nondum inscripta sunt. Quidam in regiis nutriti sunt; alii inter ruinas aut silvas creverunt. Ingenium, robur, celeritas, et ars pugnandi unicuique aliter data sunt.
+## С прихвастнями бороться положено
 
-Nulla manus eos omnino elegit. **Sors** cuique originem, staturam, donum, et titulum dedit. Alius gladium vetustum portat; alius nullo ferro fretus pugnat. In quibusdam dormit vis arcana, in aliis nihil nisi pertinacia. Non semper fortissimus vincit: saepe parvus errores inimici invenit, saepe sapiens tela evitat, interdum casus omnia vertit.
+Видел людей в серых одеждах, что шныряют повсюду? Они слуги злобного лича, что дорогу твою усложнил, да жизнь людскую портит - борьба с ними трудна и необходима, но не все могут справиться. Изгнать прихвастней Злодиус Личиуса, как в народе его зовут, работа нелегкая, но королевство выбрало тебя, так что сделать ты это обязан. 
 
-> In arena, nomen ante pugnam nihil promittit; post pugnam, una victoria nomen in memoriam ponit.
+Нет-нет, не струхуй! Дадим тебе все необходимое, самое лучшее и забористое, да крыша над головой появится. Что бы не было за твоею спиной, силы да ума в тебе хватит, где нужно хитростью да убеждением сдюжишь.
 
-## De Arena et Foedere
+## Борцами Королевства названы
 
-Qui in Ludum intrat, primum adversarium invenit, deinde alios. Pugnae singulae non solum ferrum, sed etiam iudicium explorant. Arma mirabilia, artes occultae, et dona caelestia victoriam adiuvare possunt; at superbia etiam fortissimum prosternit. Spectatores de omnibus regnis conveniunt, nam cuiusque pugnae exitus incertus est.
+Видал, наверное, и сильных борцов да молодых мужей подготовленных, что ходят вокруг да силою меряются - бери их да не страхуй, присматривайся, кто точно справится и заборет врага, сможет показать себя да будущее себе светлым сделает, кто готов и дальше сильнее да ловчее становится, у кого и харизма есть, али оружем владеет. 
 
-Nonnulli bellatores ad certamen singulare veniunt, ut vires suas metiantur. Alii socios colligunt et in magnum certamen pergunt. Pauci longiorem viam eligunt: seriem adversariorum superare, donec ultima porta aperiatur. Haec via **Cursus Infelix** appellatur, non quia spes deest, sed quia fortuna neminem diu parcit.
+Ты дыши только, молодец, в руках твоих будущее Королевства нашего да смерть врага лютого, а кто такой мощью обладает и уважение государя нашего получит да сможет в нужное русло его направить.
 
-## Cursus Infelix
+## И тебе государь обязан будет
 
-In hoc cursu, unum bellatorem adversus inimicos ordine constitutos ducunt. Primae pugnae vires probant; posteriores consilia et animos. Si heros vincit, ulterius progreditur. Si cadit, iter eius terminatur, sed memoria pugnarum manet. Inimici tamen ad propria domicilia redeunt: Ludus non mortem quaerit, sed certamen.
+О деньгах не переживай, проси сколь да когда необходимо, да и что угодно душе твоей угодно будет, но и о результатах и зрелище не забывай, знаешь-чай что и народу нашему зрелище давать надо, и силу наращивать. Как люди говаривают - двух зайцев одним разом. 
 
-Iter non eadem semper ratione procedit. Novus heros novum fatum secum fert, et etiam nota facies aliam sortem accipere potest. Hinc tabulae certaminum, genealogiae, et nomina victricum per terras feruntur. Quisque eventus novam narrationem addit; nullus scriptor eam solus praescribere potest.
+Ну, ладно уж тебе, не хмурься, иди да приглядывайся, набирай бойцов своих - сделай имя себе и им, а самый сильный да умелый пусть принесет победу и справедливость.
 
-## Ultima Porta
-
-Dicitur ultra ultimam arenam locus esse ubi Fortuna et Chaos adhuc sedent, tabulas pugnarum spectantes. Victor, si quis ad eos perveniat, unam tantum quaestionem audiet: utrum omnia consilio egit, an casus ei adfuerit? Responsum parum refert. Portae iterum aperientur, alii bellatores ingredientur, et Ludus denuo incipiet.
-
-**Sic mundus narrat. Sic arena respondet. Nunc tua fabula incipit.**
+# Королевство за тобою, укажи путь да стань героем!
