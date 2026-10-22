@@ -16,8 +16,11 @@ import tkinter as tk
 from datetime import datetime
 from tkinter import messagebox, ttk, font as tkfont
 
+import pygame
+
 import audio
 import main
+import portraits
 import data
 import Fight
 import Tournament
@@ -32,8 +35,12 @@ LOG_PATH = Path(__file__).resolve().parent / 'unlucky_run.log'
 LADDER_INDEX_KEY = 'ladder_index'
 AUDIO_DEVICE_POLL_MS = 3000
 FIGHT_HIT_FLASH_MS = 450
+# How opaque the red veil over a round loser's portrait is, 0–255.
+HIT_TINT_ALPHA = 110
 DICE_ROLL_FRAMES = 14
 DICE_HOLD_MS = 600
+# Fate tokens per fight: each lets the player throw their own die of a round once more.
+FATE_TOKENS = 2
 # A lost ladder fight is shown and heard for a moment before the defeat dialog.
 LADDER_DEFEAT_PAUSE_MS = 1000
 # A hero beaten in the ladder dies with this chance; otherwise they flee alive and the run ends.
@@ -82,20 +89,6 @@ FONT_CHOICES = {
 }
 # Chosen by resolve_fonts() once Tk is running.
 TITLE_FONT = TEXT_FONT = 'Georgia'
-TEMPLATES_DIR = Path(__file__).resolve().parent / 'CardTemplates'
-# Card pictures for race, weapon and size values, matched case-insensitively.
-RACE_TEMPLATES = {race.casefold(): template for race, template in zip(data.race_sum, ('human', 'orc', 'elf'))}
-WEAPON_TEMPLATES = {
-    weapon.casefold(): template for weapon, template in zip(
-        data.weapon_sum[1:], ('katana', 'axe', 'sword', 'pistol', 'tank', 'portal_cannon'))
-}
-SIZE_TIERS = {size.casefold(): tier for tier, size in enumerate(data.size_sum)}
-# Where a figure's right hand is (share of its width) and where each weapon is gripped.
-HAND_FRACTIONS = {'human': 0.17, 'orc': 0.12, 'elf': 0.17}
-WEAPON_GRIPS = {
-    'katana': (0.90, 0.91), 'axe': (0.92, 0.93), 'sword': (0.90, 0.91),
-    'pistol': (0.83, 0.76), 'portal_cannon': (0.90, 0.90), 'tank': (0.58, 0.62),
-}
 # Every theme colour once, as (dark, light); pages look colours up by meaning.
 # Dark is a candle-lit hall of old oak and gold; light is a manuscript of parchment and vermilion.
 THEME_COLORS = {
@@ -156,18 +149,6 @@ TINCTURES = (('#9b1c1c', PARCHMENT_TEXT), ('#1f4e8c', PARCHMENT_TEXT), ('#2f6b3a
              ('#3a3330', PARCHMENT_TEXT), ('#6b1f3a', PARCHMENT_TEXT))
 
 logger = logging.getLogger(__name__)
-
-
-def hand_position(template, figure, center_x, bottom):
-    """Where the right hand of a figure standing on `bottom` is."""
-    return (center_x - figure.width() / 2 + figure.width() * HAND_FRACTIONS.get(template, 0.16),
-            bottom - figure.height() * 0.62)
-
-
-def weapon_origin(template, weapon, hand_x, hand_y):
-    """Top-left corner that puts the weapon's grip into the hand."""
-    grip_x, grip_y = WEAPON_GRIPS.get(template, (0.9, 0.9))
-    return hand_x - weapon.width() * grip_x, hand_y - weapon.height() * grip_y
 
 
 def fit_text(text, font, width):
@@ -456,6 +437,11 @@ class CharacterApp:
         elif self.window_resolution:
             root.geometry(self.window_resolution)
         root.bind('<Escape>', self._leave_fullscreen)
+        # The hand cursor everywhere in the window: the root passes it to every widget without a cursor
+        # of its own, and the option database gives it to text fields, which bring an I-beam otherwise.
+        root.configure(cursor='hand2')
+        root.option_add('*cursor', 'hand2')
+        root.bind_all('<Enter>', self._refresh_cursor, add='+')
         self.style = ttk.Style(root)
         self.image_cache = {}
         resolve_fonts(root)
@@ -467,6 +453,20 @@ class CharacterApp:
                           add='+')
         self._apply_theme()
         self.show_intro()
+
+    @staticmethod
+    def _refresh_cursor(event):
+        """Tk on macOS sets the system cursor only when it changes, and with the same hand everywhere
+        it never does. Flicking the entered widget's cursor and back makes Tk set it again."""
+        widget = event.widget
+        if isinstance(widget, str):
+            return
+        try:
+            cursor = str(widget.cget('cursor'))
+            widget.configure(cursor='arrow' if cursor != 'arrow' else 'hand2')
+            widget.configure(cursor=cursor)
+        except tk.TclError:
+            pass
 
     def _load_settings(self):
         try:
@@ -2055,9 +2055,13 @@ class CharacterApp:
                                      highlightthickness=0, background=self.ui_colors['background'])
         self.fight_wheel.pack(pady=(0, 6))
         self._draw_fight_wheel(names[0], names[1], 0)
-        self.fight_button = ttk.Button(center, text='Начать сражение',
+        actions = ttk.Frame(center)
+        actions.pack(pady=(0, 8))
+        self.fight_button = ttk.Button(actions, text='Начать сражение',
                                        command=self.start_fight, style='Primary.TButton')
-        self.fight_button.pack(pady=(0, 8))
+        self.fight_button.pack(side='left')
+        # Shown only while the player may spend a fate token on the round's dice.
+        self.fight_reroll_button = ttk.Button(actions, command=self._reroll_round_dice)
         history_frame = ttk.LabelFrame(center, text='История раундов', padding=6)
         history_frame.pack(fill='x', pady=(0, 6))
         self.fight_history = ttk.Treeview(
@@ -2153,49 +2157,31 @@ class CharacterApp:
             self._draw_ladder_villain_portrait(canvas, fighter_name, properties)
             return
 
-        template = RACE_TEMPLATES.get(properties.get('race', '').casefold())
-        if not template:
+        portrait, photo = self._portrait(properties, 'scene', 130, 195)
+        if photo is None:
             canvas.create_text(65, 97, text=fighter_name, width=120, fill=self.ui_colors['portrait_text'])
             return
-        background = self._template_image(TEMPLATES_DIR / 'races' / f'{template}.png', 130, 195)
-        if background:
-            canvas.create_image(65, 97, image=background, anchor='center')
-        target_height = (120, 140, 160, 180)[SIZE_TIERS.get(properties.get('size', '').casefold(), 1)]
-        character = self._template_image(TEMPLATES_DIR / 'characters' / f'{template}.png', None, target_height)
-        if character:
-            self._draw_weapon(canvas, properties, *hand_position(template, character, 65, 189),
-                              max(16, round(32 * target_height / 140)))
-            canvas.create_image(65, 189, image=character, anchor='s')
+        canvas.create_image(65, 97, image=photo, anchor='center')
 
-    def _draw_weapon(self, canvas, properties, hand_x, hand_y, size):
-        """Put the weapon picture into the hand; return False when there is no picture for it."""
-        template = WEAPON_TEMPLATES.get(properties.get('weapon', '').casefold())
-        weapon = template and self._template_image(TEMPLATES_DIR / 'weapons' / f'{template}.png', size, size)
-        if not weapon:
-            return False
-        canvas.create_image(*weapon_origin(template, weapon, hand_x, hand_y), image=weapon, anchor='nw')
-        return True
+    def _portrait(self, properties, mode, width, height):
+        """The composed portrait and its Tk picture, made once per look of the hero and kept for the session."""
+        key = (portraits.portrait_key(properties), mode, width, height)
+        if key not in self.image_cache:
+            try:
+                portrait = portraits.render(*key)
+            except (pygame.error, OSError, ValueError) as error:
+                logger.warning('Не удалось собрать портрет %s: %s', key, error)
+                portrait = None
+            photo = portrait and tk.PhotoImage(data=portrait.data)
+            self.image_cache[key] = (portrait, photo)
+        return self.image_cache[key]
 
-    def _template_image(self, path, max_width=None, max_height=None):
-        """A picture shrunk by a whole factor to fit the box, loaded once per session."""
-        key = (path, max_width, max_height)
-        if key in self.image_cache:
-            return self.image_cache[key]
-        if not path.is_file():
-            return None
-        try:
-            source = tk.PhotoImage(file=str(path))
-        except tk.TclError as error:
-            logger.warning('Не удалось загрузить картинку %s: %s', path, error)
-            image = None
-        else:
-            scale = max(1, math.ceil(max(
-                source.width() / max_width if max_width else 0,
-                source.height() / max_height if max_height else 0,
-            )))
-            image = source.subsample(scale, scale)
-        self.image_cache[key] = image
-        return image
+    def _fitted_picture(self, path, width, height):
+        key = (path, width, height)
+        if key not in self.image_cache:
+            picture = path.is_file() and portraits.fitted_picture(path, width, height)
+            self.image_cache[key] = picture and tk.PhotoImage(data=picture)
+        return self.image_cache[key]
 
     def _draw_ladder_villain_portrait(self, canvas, fighter_name, properties):
         image_reference = properties.get('image', '').strip()
@@ -2207,7 +2193,7 @@ class CharacterApp:
                 or not image_path.is_relative_to(project_root)):
             canvas.create_text(65, 97, text=f'{fighter_name}\n\nНет портрета', width=120, fill=foreground)
             return
-        image = self._template_image(image_path, 130, 195)
+        image = self._fitted_picture(image_path, 130, 195)
         if image is None:
             canvas.create_text(
                 65, 97, text=f'{fighter_name}\n\nПортрет не найден:\n{image_reference}',
@@ -2241,11 +2227,11 @@ class CharacterApp:
             else:
                 self.show_fight()
             return
+        fight_paths = (self.fight_files[first_index], self.fight_files[second_index])
         try:
+            # Points are settled when the fight ends: a fate token may still turn it around.
             result = Fight.fight_match(
-                self.fight_files[first_index], self.fight_files[second_index],
-                award_points=not self.fight_ladder_mode,
-                check_liveness=(True, not self.fight_ladder_mode),
+                *fight_paths, award_points=False, check_liveness=(True, not self.fight_ladder_mode),
             )
         except (OSError, ValueError) as error:
             self._show_error('Ошибка сражения', str(error))
@@ -2255,14 +2241,13 @@ class CharacterApp:
         if not self.fight_ladder_mode:
             self.first_fighter.configure(state='disabled')
             self.second_fighter.configure(state='disabled')
-        self.fight_rounds = result['comparisons']
-        self.fight_totals = (result['first_total'], result['second_total'])
-        self.fight_winner_index = result['winner_index']
-        self.fight_winner = self.fight_names[self.fight_winner_index]
+            self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
+        self.fight_paths = fight_paths
+        self.fight_result = result
+        self.fight_tokens = FATE_TOKENS
+        self._sync_fight_result()
         self.fight_round_index = 0
         self.fight_rotation = 0
-        if not self.fight_ladder_mode:
-            self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
         self.fight_history.delete(*self.fight_history.get_children())
         self._insert_fight_effects(result['effects'])
         self.fight_status.configure(style='TLabel')
@@ -2351,11 +2336,19 @@ class CharacterApp:
         portrait = self.fight_portrait_canvases[loser_index]
         width, height = int(portrait['width']), int(portrait['height'])
         # Drawn inside the canvas: a highlight border would shift the layout on every hit.
-        portrait.create_rectangle(1, 1, width - 1, height - 1, fill=LOSER_COLOR, stipple='gray50',
-                                  outline=LOSER_COLOR, width=3, tags=('hit',))
+        portrait.create_image(0, 0, image=self._hit_tint(width, height), anchor='nw', tags=('hit',))
+        portrait.create_rectangle(1, 1, width - 1, height - 1, outline=LOSER_COLOR, width=3, tags=('hit',))
         self._paint_fight_card(loser_index, self.ui_colors['lose_fill'], LOSER_COLOR, LOSER_COLOR)
         self.fight_flash_index = loser_index
         self.fight_flash_after_id = self.root.after(FIGHT_HIT_FLASH_MS, self._end_round_flash)
+
+    def _hit_tint(self, width, height):
+        """The loser's portrait shows through a red veil, as if they took a hit."""
+        key = ('hit tint', width, height)
+        if key not in self.image_cache:
+            red = tuple(int(LOSER_COLOR[i:i + 2], 16) for i in (1, 3, 5))
+            self.image_cache[key] = tk.PhotoImage(data=portraits.tint(width, height, red, HIT_TINT_ALPHA))
+        return self.image_cache[key]
 
     def _end_round_flash(self):
         self._cancel_after('fight_flash_after_id')
@@ -2395,6 +2388,11 @@ class CharacterApp:
         if self.fight_round_index >= len(self.fight_rounds):
             self._end_round_flash()
             self.fight_focus_key = None
+            if not self.fight_ladder_mode:
+                try:
+                    Fight.award_fight_points(*self.fight_paths, self.fight_winner_index)
+                except (OSError, UnicodeError) as error:
+                    self._show_error('Не удалось начислить очки', str(error))
             self._draw_fight_portrait(0)
             self._draw_fight_portrait(1)
             last_comparison = self.fight_rounds[-1]
@@ -2486,8 +2484,19 @@ class CharacterApp:
         self.fight_button.configure(text='🎲 Бросить кубы', command=self._roll_round_dice, state='normal')
         self.fight_button.focus_set()
 
+    def _sync_fight_result(self):
+        result = self.fight_result
+        self.fight_rounds = result['comparisons']
+        self.fight_totals = (result['first_total'], result['second_total'])
+        self.fight_winner_index = result['winner_index']
+        self.fight_winner = self.fight_names[self.fight_winner_index]
+
     def _roll_round_dice(self):
         self.fight_button.configure(text='Бой идёт…', state='disabled')
+        self._tumble_dice((0, 1), self._offer_fate_token)
+
+    def _tumble_dice(self, rolling, on_landed):
+        """The dice in `rolling` tumble and settle on the round's luck; the others lie still."""
         comparison = self.fight_rounds[self.fight_round_index]
         faces = (comparison['first_luck'], comparison['second_luck'])
         frame_index = 0
@@ -2497,7 +2506,8 @@ class CharacterApp:
             frame_index += 1
             if frame_index < DICE_ROLL_FRAMES:
                 self._draw_round_dice(
-                    [random.randint(0, 20) for _ in faces], [random.uniform(-30, 30) for _ in faces],
+                    [random.randint(0, 20) if index in rolling else face for index, face in enumerate(faces)],
+                    [random.uniform(-30, 30) if index in rolling else 0 for index in range(2)],
                 )
                 if frame_index % 2:
                     self.audio.play_effect('wheel_tick')
@@ -2506,9 +2516,42 @@ class CharacterApp:
                 return
             self._draw_round_dice(faces, (0, 0))
             self.audio.play_effect('wheel_stop')
-            self.spin_after_id = self.root.after(DICE_HOLD_MS, self._spin_round_wheel)
+            on_landed()
 
         tumble()
+
+    def _offer_fate_token(self):
+        if not self.fight_tokens:
+            self.spin_after_id = self.root.after(DICE_HOLD_MS, self._spin_round_wheel)
+            return
+        luck = self.fight_rounds[self.fight_round_index]['first_luck']
+        self._show_fight_board(
+            self._round_title(),
+            note=f'Твой куб: +{luck}. Перебросить? Новый бросок окончательный (0–{Fight.REROLL_FACES})',
+        )
+        self.fight_button.configure(text='Принять', command=self._accept_round_dice, state='normal')
+        self.fight_reroll_button.configure(text=f'🎲 Перебросить · жетонов: {self.fight_tokens}')
+        self.fight_reroll_button.pack(side='left', padx=(8, 0))
+        self.fight_button.focus_set()
+
+    def _accept_round_dice(self):
+        self.fight_reroll_button.pack_forget()
+        self.fight_button.configure(text='Бой идёт…', state='disabled')
+        self._spin_round_wheel()
+
+    def _reroll_round_dice(self):
+        self.fight_reroll_button.pack_forget()
+        self.fight_button.configure(text='Бой идёт…', state='disabled')
+        self.fight_tokens -= 1
+        old_luck, new_luck = Fight.reroll_round_luck(self.fight_result, self.fight_round_index, 0)
+        self._sync_fight_result()
+        self._show_fight_board(self._round_title(), note=f'Переброс: было +{old_luck}…')
+
+        def landed():
+            self._show_fight_board(self._round_title(), note=f'Переброс: +{old_luck} → +{new_luck}')
+            self.spin_after_id = self.root.after(DICE_HOLD_MS, self._spin_round_wheel)
+
+        self._tumble_dice((0,), landed)
 
     def _draw_round_dice(self, faces, tilts):
         """Each fighter's die over the wheel, in the colour of their half."""
@@ -3043,7 +3086,7 @@ class CharacterApp:
 
     def _draw_gallery_race_icon(self, canvas, x, y, race_value, tag):
         """Draw a compact, theme-friendly race marker for a collection tile."""
-        kind = RACE_TEMPLATES.get(race_value.casefold(), 'human')
+        kind = portraits.RACE_TEMPLATES.get(race_value.casefold(), 'human')
         palettes = {
             'human': ('#e8c9a6', '#684b39', '#bd8c65'),
             'orc': ('#9dbc88', '#3b5942', '#76976a'),
@@ -3286,32 +3329,19 @@ class CharacterApp:
         is_dead = not Fight.is_character_alive(properties)
         dead_label = '#ffe8e9'
         canvas.configure(background=colors['dead_fill'] if is_dead else colors['background'])
-        template_name = RACE_TEMPLATES.get(properties.get('race', '').casefold())
-        photo = template_name and self._template_image(
-            TEMPLATES_DIR / 'races' / f'{template_name}.png', 256, 384,
-        )
+        portrait, photo = self._portrait(properties, 'card', 256, 384)
         if photo:
             left = (int(canvas['width']) - photo.width()) // 2
             top = (int(canvas['height']) - photo.height()) // 2
             canvas.create_image(left, top, image=photo, anchor='nw')
+            if portrait.hand and not portrait.weapon_drawn:
+                self._draw_card_weapon(canvas, properties, left + portrait.hand[0], top + portrait.hand[1],
+                                       portrait.size_factor)
         else:
             left, top = 12, 12
             canvas.create_rectangle(left, top, left + 256, top + 384,
                                     fill=WOOD, outline=GILT, width=3)
-
-        target_height = (160, 185, 210, 235)[SIZE_TIERS.get(properties.get('size', '').casefold(), 1)]
-        figure = template_name and self._template_image(
-            TEMPLATES_DIR / 'characters' / f'{template_name}.png', None, target_height,
-        )
-        figure_x = left + 130
-        figure_bottom = top + 300
         ability = properties.get('ability', '—')
-
-        if figure:
-            self._draw_card_weapon(canvas, properties,
-                                   *hand_position(template_name, figure, figure_x, figure_bottom),
-                                   target_height / 185)
-            canvas.create_image(figure_x, figure_bottom, image=figure, anchor='s')
 
         bar_background = colors['dead_bar'] if is_dead else '#1a120b'
         canvas.create_rectangle(left + 3, top + 4, left + 257, top + 60,
@@ -3356,9 +3386,7 @@ class CharacterApp:
         return fit_text(text, card_font, CARD_ABILITY_WIDTH)
 
     def _draw_card_weapon(self, canvas, properties, hand_x, hand_y, size_factor):
-        """The weapon picture, or a simple drawing of it when the picture file is missing."""
-        if self._draw_weapon(canvas, properties, hand_x, hand_y, max(20, round(48 * size_factor))):
-            return
+        """A simple drawing of the weapon, for when its picture file is missing."""
         weapon = properties.get('weapon', '').casefold()
         if weapon in ('', 'none', 'без оружия'):
             return

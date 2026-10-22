@@ -27,6 +27,14 @@ transparent PNGs while keeping their filenames:
 - `weapons/tank.png`
 - `weapons/portal_cannon.png`
 
-The `Без оружия` value has no overlay. Weapon images are scaled down and placed
-over the race background, just behind the character layer, so the hand sits in
-front of the grip. The card also draws a colored aura for powers.
+The `Без оружия` value has no overlay. Weapon images are placed over the race
+background, just behind the character layer, so the hand sits in front of the
+grip. Each weapon gets a thin dark outline and, when enchanted, a glow in the
+colour of its enchantment.
+
+`portraits.py` composes every portrait at full size (backgrounds are treated as
+1024×1536) and scales the result down smoothly once, so replacement images
+should keep these proportions. The collection card shows the whole background;
+the arena portrait shows only the painted scene between the text panels, the
+area from about y=230 to y=1160 around the middle of the background, so keep
+the scene there. A dead hero's portrait is greyed out with a red tint.

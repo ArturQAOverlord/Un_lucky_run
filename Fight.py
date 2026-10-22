@@ -160,6 +160,8 @@ CHAOS_CONDUCTOR_CHANCE = 0.4
 DEVIL_CHANCE = 0.5
 DEVIL_THEFT = 5
 NULLIFIER = 'Нулификатор-пария'
+# A rerolled die in one round shows 0 to this many points of luck.
+REROLL_FACES = 6
 
 
 def _signed(amount):
@@ -427,9 +429,9 @@ def fight_match(first_path, second_path, award_points=True, check_liveness=(True
     else:
         winner_index = 0 if first_total > second_total else 1
     if award_points:
-        change_points(first_path, 5 if winner_index == 0 else -4)
-        change_points(second_path, 5 if winner_index == 1 else -4)
+        award_fight_points(first_path, second_path, winner_index)
     return {
+        'names': names,
         'comparisons': comparisons,
         'effects': [event for event in events if event['round'] is None],
         'winner': names[winner_index],
@@ -437,6 +439,40 @@ def fight_match(first_path, second_path, award_points=True, check_liveness=(True
         'first_total': first_total,
         'second_total': second_total,
     }
+
+
+def award_fight_points(first_path, second_path, winner_index):
+    change_points(first_path, 5 if winner_index == 0 else -4)
+    change_points(second_path, 5 if winner_index == 1 else -4)
+
+
+def _pick_winner(first_total, second_total):
+    if first_total == second_total:
+        return random.randrange(2)
+    return 0 if first_total > second_total else 1
+
+
+def reroll_round_luck(result, round_index, fighter_index):
+    """A fate token: the fighter's luck in one round is thrown again and the new throw stands,
+    even when it is worse. The round, the totals and the fight's winner are settled anew."""
+    comparison = result['comparisons'][round_index]
+    side = ('first', 'second')[fighter_index]
+    old_luck, new_luck = comparison[f'{side}_luck'], random.randint(0, REROLL_FACES)
+    comparison[f'{side}_luck'] = new_luck
+    total = comparison[f'{side}_total'] + new_luck - old_luck
+    # Effects never push a round below zero, whatever the dice say.
+    comparison[f'{side}_bonus'] -= min(0, total)
+    comparison[f'{side}_total'] = max(0, total)
+
+    winner_index = _pick_winner(comparison['first_total'], comparison['second_total'])
+    comparison.update(winner=result['names'][winner_index], winner_index=winner_index)
+    result['first_total'] = sum(round_['first_total'] for round_ in result['comparisons'])
+    result['second_total'] = sum(round_['second_total'] for round_ in result['comparisons'])
+    # A tie keeps the coin already tossed for the fight.
+    if result['first_total'] != result['second_total']:
+        result['winner_index'] = _pick_winner(result['first_total'], result['second_total'])
+    result['winner'] = result['names'][result['winner_index']]
+    return old_luck, new_luck
 
 
 def play(first_path, second_path):
