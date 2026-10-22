@@ -3,3 +3,4 @@ Characters/*.txt
 LadderRuns/*.json
 unlucky_run.log
 /settings.json
+.venv/

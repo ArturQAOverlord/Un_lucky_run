@@ -32,8 +32,12 @@ LOG_PATH = Path(__file__).resolve().parent / 'unlucky_run.log'
 LADDER_INDEX_KEY = 'ladder_index'
 AUDIO_DEVICE_POLL_MS = 3000
 FIGHT_HIT_FLASH_MS = 450
+DICE_ROLL_FRAMES = 14
+DICE_HOLD_MS = 600
 # A lost ladder fight is shown and heard for a moment before the defeat dialog.
 LADDER_DEFEAT_PAUSE_MS = 1000
+# A hero beaten in the ladder dies with this chance; otherwise they flee alive and the run ends.
+LADDER_DEATH_CHANCE = 0.5
 # Borders of the winner and the loser of a fight; the loser colour also marks a lost round.
 WINNER_COLOR = '#3f7d3a'
 LOSER_COLOR = '#a8322a'
@@ -55,6 +59,11 @@ BRACKET_ZOOM_LIMITS = (0.25, 2.4)
 FIGHT_CARD_VALUE_CHARS = 14
 # Stats that may take two lines on an arena stats card; they always get both, so rows keep their height.
 FIGHT_CARD_TWO_LINE_STATS = {'ability', 'title'}
+# The fighter card row lit up while its round is fought.
+ROUND_STAT_KEYS = {
+    'Сила': 'strength', 'Скорость': 'speed', 'Интеллект': 'iq', 'Боевые навыки': 'fighting',
+    'Владение оружием': 'weapon_mastery', 'Мощь способности': 'ability',
+}
 # Upgradable stats; each pool lists tiers from the best to the worst.
 UPGRADE_POOLS = {
     'strength': data.strength_sum,
@@ -133,6 +142,7 @@ THEME_COLORS = {
     'dead_text': ('#f0a49a', '#8f2418'),
     'dead_bar': ('#5a1c18', '#7a2018'),
     'card_accent': ('#d4af37', '#a8822e'),
+    'stat_focus_fill': ('#3d3216', '#efe0a8'),
 }
 # The chronicle is always written on parchment, whatever the theme.
 PARCHMENT = {'paper': '#ecdcb6', 'ink': '#2b1d12', 'rubric': '#7a1f14', 'heading': '#5a3a1a',
@@ -1246,8 +1256,11 @@ class CharacterApp:
             result = record.get('result', 'Неизвестно')
             last_opponent = record.get('last_opponent') or '—'
             tag = 'victory' if result == 'Победа' else 'defeat' if result == 'Поражение' else ''
+            # Older runs have no outcome: every defeat used to be a death.
+            outcome = record.get('outcome')
+            result_text = f'{result}: {outcome.lower()}' if outcome else result
             table.insert('', 'end', tags=(tag,) if tag else (), values=(
-                record.get('run_number', '—'), finished, character_name, result,
+                record.get('run_number', '—'), finished, character_name, result_text,
                 record.get('fights_completed', 0), last_opponent,
             ))
 
@@ -1318,13 +1331,18 @@ class CharacterApp:
                 f'Не удалось отметить {self.ladder_hero_path.stem} как мёртвого:\n{error}',
             )
 
-    def _announce_ladder_defeat(self):
+    def _announce_ladder_defeat(self, fled):
         self.spin_after_id = None
         self.audio.play_effect('ladder_run_loss')
-        messagebox.showinfo(
-            'Поражение',
-            f'{self.ladder_hero_path.stem} проиграл бой с {self.ladder_villains[self.ladder_index].stem}.',
-        )
+        hero, villain = self.ladder_hero_path.stem, self.ladder_villains[self.ladder_index].stem
+        if fled:
+            messagebox.showinfo(
+                'Сбежал',
+                f'{hero} проиграл бой с {villain}, но сумел сбежать живым.\n\n'
+                'Забег окончен, герой и его очки сохранены.',
+            )
+        else:
+            messagebox.showinfo('Погиб', f'{hero} пал в бою с {villain}.')
         self.show_home()
 
     def _save_ladder_run_progress(self, fight_result=None, final_result=None):
@@ -2002,14 +2020,9 @@ class CharacterApp:
         self.fight_portrait_canvases = []
         self.fight_stat_labels = []
         self.fight_panels = (left, right)
-        self.fight_outcome_labels = []
+        self.fight_stat_rows = [{}, {}]
+        self.fight_focus_key = None
         for panel in (left, right):
-            outcome = tk.Label(panel, text='', font=(TEXT_FONT, 10, 'bold'),
-                               background=self.ui_colors['arena_fill'],
-                               foreground=self.ui_colors['arena_text'])
-            outcome.pack(fill='x', pady=(4, 0))
-            outcome.pack_forget()
-            self.fight_outcome_labels.append(outcome)
             portrait = tk.Canvas(panel, width=130, height=195, highlightthickness=0,
                                  background=self.ui_colors['background'])
             portrait.pack(pady=(6, 0))
@@ -2022,15 +2035,29 @@ class CharacterApp:
             self.first_fighter.bind('<<ComboboxSelected>>', lambda _event: self._on_fight_selection_changed(0))
             self.second_fighter.bind('<<ComboboxSelected>>', lambda _event: self._on_fight_selection_changed(1))
         wheel_size = int(280 * self._wheel_scale(600, 640))
-        # Long announcements wrap to the width of the wheel below.
-        self.fight_status = ttk.Label(center, text='', anchor='center', justify='center', wraplength=wheel_size)
-        self.fight_status.pack(fill='x', pady=(0, 4))
+        # The announcement keeps a fixed height, room for a two-line banner, the score and a note,
+        # so the wheel below never jumps. Long announcements wrap to the width of the wheel.
+        title_font, score_font, note_font = (TITLE_FONT, 15), (TITLE_FONT, 22), (TEXT_FONT, 9)
+        board_height = (2 * tkfont.Font(font=title_font).metrics('linespace') + 16
+                        + tkfont.Font(font=score_font).metrics('linespace')
+                        + 2 * tkfont.Font(font=note_font).metrics('linespace'))
+        board = ttk.Frame(center, height=board_height)
+        board.pack(fill='x', pady=(0, 4))
+        board.pack_propagate(False)
+        self.fight_status = ttk.Label(board, text='', anchor='center', justify='center', wraplength=wheel_size)
+        self.fight_status.pack(fill='x')
+        self.fight_score = ttk.Label(board, text=' ', anchor='center', font=score_font)
+        self.fight_score.pack(fill='x')
+        self.fight_note = ttk.Label(board, text=' ', anchor='center', justify='center', font=note_font,
+                                    foreground=self.ui_colors['gold_text'], wraplength=wheel_size)
+        self.fight_note.pack(fill='x')
         self.fight_wheel = tk.Canvas(center, width=wheel_size, height=wheel_size,
                                      highlightthickness=0, background=self.ui_colors['background'])
         self.fight_wheel.pack(pady=(0, 6))
         self._draw_fight_wheel(names[0], names[1], 0)
         self.fight_button = ttk.Button(center, text='Начать сражение',
                                        command=self.start_fight, style='Primary.TButton')
+        self.fight_button.pack(pady=(0, 8))
         history_frame = ttk.LabelFrame(center, text='История раундов', padding=6)
         history_frame.pack(fill='x', pady=(0, 6))
         self.fight_history = ttk.Treeview(
@@ -2041,16 +2068,16 @@ class CharacterApp:
         # them below these, so wide ones would be cut off in a narrow window.
         for column, title, width in (
             ('round', 'Раунд', 66), ('attribute', 'Параметр', 170),
-            ('score', 'Очки + удача', 120), ('winner', 'Победитель', 150),
+            ('score', 'Очки+удача±эффекты', 140), ('winner', 'Победитель', 150),
         ):
             self.fight_history.heading(column, text=title)
             self.fight_history.column(column, width=width, minwidth=60, anchor='center',
                                       stretch=column in ('attribute', 'winner'))
         self.fight_history.pack(fill='x')
-        self.fight_button.pack()
         self.fight_history.tag_configure('first-wins', foreground=self.ui_colors['victory_text'])
         self.fight_history.tag_configure('second-wins', foreground=self.ui_colors['defeat_text'])
         self.fight_history.tag_configure('total', font=(TEXT_FONT, 9, 'bold'))
+        self.fight_history.tag_configure('effect', foreground=self.ui_colors['gold_text'])
         self._draw_fight_portrait(0)
         self._draw_fight_portrait(1)
 
@@ -2101,6 +2128,7 @@ class CharacterApp:
         label_font, value_font = (TEXT_FONT, 9, 'bold'), (TEXT_FONT, 9)
         label_width = max(tkfont.Font(font=label_font).measure(text) for text, _key in stat_fields) + 6
         value_width = tkfont.Font(font=value_font).measure('0') * FIGHT_CARD_VALUE_CHARS
+        self.fight_stat_rows[fighter_index] = {}
         for label_text, key in stat_fields:
             value = properties.get(key, '').strip()
             if not value or value.casefold() == 'none':
@@ -2111,6 +2139,7 @@ class CharacterApp:
                 highlightbackground=self.ui_colors['border'],
             )
             row.pack(fill='x', padx=3, pady=2)
+            self.fight_stat_rows[fighter_index][key] = row
             row.grid_columnconfigure(0, minsize=label_width)
             row.grid_columnconfigure(1, weight=1, minsize=value_width)
             # No inner padding: a label is exactly as wide as its text, so the columns never stretch.
@@ -2235,6 +2264,7 @@ class CharacterApp:
         if not self.fight_ladder_mode:
             self.fight_names = (self.first_fighter.get(), self.second_fighter.get())
         self.fight_history.delete(*self.fight_history.get_children())
+        self._insert_fight_effects(result['effects'])
         self.fight_status.configure(style='TLabel')
         self._reset_fight_panels()
         self._spin_fight_round()
@@ -2279,12 +2309,38 @@ class CharacterApp:
                 row.configure(highlightbackground=row_border)
                 for label in row.winfo_children():
                     label.configure(background=background)
+        focused_row = self.fight_stat_rows[index].get(self.fight_focus_key)
+        if focused_row is not None:
+            focus = self.ui_colors['stat_focus_fill']
+            focused_row.configure(background=focus, highlightbackground=GILT)
+            for label in focused_row.winfo_children():
+                label.configure(background=focus)
+
+    def _focus_fight_stat(self, round_label):
+        """Light up the compared characteristic on both cards; None puts the cards back at rest."""
+        self.fight_focus_key = ROUND_STAT_KEYS.get(round_label)
+        for index in (0, 1):
+            self._paint_fight_card(index, *self._fight_card_default_colors())
+
+    def _show_fight_board(self, title, score='', note=''):
+        self.fight_status.configure(text=title)
+        self.fight_score.configure(text=score or ' ')
+        self.fight_note.configure(text=note or ' ')
+
+    def _round_title(self):
+        attribute = self.fight_rounds[self.fight_round_index]['attribute']
+        return f'Раунд {self.fight_round_index + 1} из {len(self.fight_rounds)} · {attribute}'
+
+    def _round_note(self, comparison):
+        """One line for the round's effects: the last one fired is the most striking, the rest are counted."""
+        events = comparison['events']
+        if not events:
+            return ''
+        extra = f'  ·  ещё эффектов: {len(events) - 1}' if len(events) > 1 else ''
+        return f'✦ {self._effect_text(events[-1])}{extra}'
 
     def _reset_fight_panels(self):
-        for index, (panel, outcome, portrait) in enumerate(zip(
-            self.fight_panels, self.fight_outcome_labels, self.fight_portrait_canvases,
-        )):
-            outcome.pack_forget()
+        for index, (panel, portrait) in enumerate(zip(self.fight_panels, self.fight_portrait_canvases)):
             panel.configure(style='TLabelframe')
             self._paint_fight_card(index, *self._fight_card_default_colors())
             portrait.configure(highlightthickness=0)
@@ -2311,8 +2367,25 @@ class CharacterApp:
 
     @staticmethod
     def _round_score_text(comparison):
-        return (f"{comparison['first_points']}+{comparison['first_luck']} : "
-                f"{comparison['second_points']}+{comparison['second_luck']}")
+        def side(prefix):
+            bonus = comparison[f'{prefix}_bonus']
+            bonus_text = f'{bonus:+d}'.replace('-', '−') if bonus else ''
+            return f"{comparison[f'{prefix}_points']}+{comparison[f'{prefix}_luck']}{bonus_text}"
+        return f"{side('first')} : {side('second')}"
+
+    def _effect_text(self, event):
+        detail = f" ({event['detail']})" if event['detail'] else ''
+        return f"{self.fight_names[event['owner']]}: {event['text']}{detail}"
+
+    def _insert_fight_effects(self, events):
+        """Abilities, enchantments and chaos that fired get their own muted rows in the history."""
+        item = None
+        for event in events:
+            item = self.fight_history.insert('', 'end', tags=('effect',), values=(
+                '✦', event['text'], event['detail'], self.fight_names[event['owner']],
+            ))
+        if item is not None:
+            self.fight_history.see(item)
 
     @staticmethod
     def _winner_text(winner, first_total, second_total):
@@ -2321,6 +2394,7 @@ class CharacterApp:
     def _spin_fight_round(self):
         if self.fight_round_index >= len(self.fight_rounds):
             self._end_round_flash()
+            self.fight_focus_key = None
             self._draw_fight_portrait(0)
             self._draw_fight_portrait(1)
             last_comparison = self.fight_rounds[-1]
@@ -2330,10 +2404,10 @@ class CharacterApp:
                 last_comparison['first_total'],
                 last_comparison['second_total'],
             )
-            self.fight_status.configure(text='Сражение завершено')
             winner = self.fight_winner
             winner_index = self.fight_winner_index
             first_total, second_total = self.fight_totals
+            self._show_fight_board('', f'{first_total} : {second_total}')
             total_item = self.fight_history.insert(
                 '', 'end', tags=('first-wins' if winner_index == 0 else 'second-wins', 'total'),
                 values=('Итог', 'Сумма раундов', f'{first_total} : {second_total}',
@@ -2341,9 +2415,7 @@ class CharacterApp:
             )
             self.fight_history.see(total_item)
             colors = self.ui_colors
-            for index, (panel, outcome, portrait) in enumerate(zip(
-                self.fight_panels, self.fight_outcome_labels, self.fight_portrait_canvases,
-            )):
+            for index, (panel, portrait) in enumerate(zip(self.fight_panels, self.fight_portrait_canvases)):
                 is_winner = index == winner_index
                 color = WINNER_COLOR if is_winner else LOSER_COLOR
                 background = colors['win_fill'] if is_winner else colors['lose_fill']
@@ -2352,11 +2424,6 @@ class CharacterApp:
                 self.style.configure(style_name, bordercolor=color, background=background)
                 self.style.configure(f'{style_name}.Label', foreground=foreground, background=background)
                 panel.configure(style=style_name)
-                outcome.configure(
-                    text='ПОБЕДИТЕЛЬ' if is_winner else 'ПРОИГРАВШИЙ',
-                    background=background, foreground=foreground,
-                )
-                outcome.pack(fill='x', pady=(4, 0))
                 self._paint_fight_card(index, background, color, color)
                 portrait.configure(highlightthickness=3, highlightbackground=color)
             self.style.configure('FightWinner.TLabel', background=colors['win_fill'],
@@ -2367,9 +2434,17 @@ class CharacterApp:
                 if winner_index == 1:
                     # The lost fight is heard at once; the run-level cue comes with the dialog.
                     self.audio.play_effect('ladder_battle_loss')
-                    self._mark_ladder_hero_dead()
+                    fled = random.random() >= LADDER_DEATH_CHANCE
+                    fate = 'Сбежал' if fled else 'Погиб'
+                    if not fled:
+                        self._mark_ladder_hero_dead()
+                    self.fight_status.configure(text=f'✦ {fate.upper()}: {self.ladder_hero_path.stem} ✦')
+                    if getattr(self, 'ladder_run_record', None) is not None:
+                        self.ladder_run_record['outcome'] = fate
                     self._save_ladder_run_progress(fight_result='Поражение', final_result='Поражение')
-                    self.spin_after_id = self.root.after(LADDER_DEFEAT_PAUSE_MS, self._announce_ladder_defeat)
+                    self.spin_after_id = self.root.after(
+                        LADDER_DEFEAT_PAUSE_MS, lambda: self._announce_ladder_defeat(fled),
+                    )
                     return
                 if self.ladder_index + 1 < len(self.ladder_villains):
                     self.audio.play_effect('ladder_battle_win')
@@ -2393,7 +2468,7 @@ class CharacterApp:
             self.audio.play_effect(
                 'arena_battle_win' if winner_index == 0 else 'arena_battle_loss',
             )
-            self.fight_button.configure(text='Начать сражение', state='normal')
+            self.fight_button.configure(text='Начать сражение', command=self.start_fight, state='normal')
             self.first_fighter.configure(state='readonly')
             self.second_fighter.configure(state='readonly')
             self.first_fighter.selection_clear()
@@ -2401,6 +2476,60 @@ class CharacterApp:
             self.fight_button.focus_set()
             return
 
+        self._offer_round_dice()
+
+    def _offer_round_dice(self):
+        """Every round waits for the player to throw the dice that bring its share of luck."""
+        comparison = self.fight_rounds[self.fight_round_index]
+        self._focus_fight_stat(comparison['attribute'])
+        self._show_fight_board(self._round_title(), note='🎲 Брось кубы удачи')
+        self.fight_button.configure(text='🎲 Бросить кубы', command=self._roll_round_dice, state='normal')
+        self.fight_button.focus_set()
+
+    def _roll_round_dice(self):
+        self.fight_button.configure(text='Бой идёт…', state='disabled')
+        comparison = self.fight_rounds[self.fight_round_index]
+        faces = (comparison['first_luck'], comparison['second_luck'])
+        frame_index = 0
+
+        def tumble():
+            nonlocal frame_index
+            frame_index += 1
+            if frame_index < DICE_ROLL_FRAMES:
+                self._draw_round_dice(
+                    [random.randint(0, 20) for _ in faces], [random.uniform(-30, 30) for _ in faces],
+                )
+                if frame_index % 2:
+                    self.audio.play_effect('wheel_tick')
+                # The dice slow down before they settle.
+                self.spin_after_id = self.root.after(30 + 8 * frame_index, tumble)
+                return
+            self._draw_round_dice(faces, (0, 0))
+            self.audio.play_effect('wheel_stop')
+            self.spin_after_id = self.root.after(DICE_HOLD_MS, self._spin_round_wheel)
+
+        tumble()
+
+    def _draw_round_dice(self, faces, tilts):
+        """Each fighter's die over the wheel, in the colour of their half."""
+        canvas = self.fight_wheel
+        canvas.delete('dice')
+        width, height = int(canvas['width']), int(canvas['height'])
+        cx, cy = width / 2, height / 2 + 8
+        half = (min(width, height) / 2 - 34) * 0.28
+        for index, (face, tilt) in enumerate(zip(faces, tilts)):
+            x = cx + (-1.15 if index == 0 else 1.15) * half
+            fill, ink = TINCTURES[1] if index == 0 else TINCTURES[0]
+            angle = math.radians(tilt)
+            corners = []
+            for dx, dy in ((-half, -half), (half, -half), (half, half), (-half, half)):
+                corners += [x + dx * math.cos(angle) - dy * math.sin(angle),
+                            cy + dx * math.sin(angle) + dy * math.cos(angle)]
+            canvas.create_polygon(corners, fill=fill, outline=GILT, width=3, tags=('dice',))
+            canvas.create_text(x, cy, text=f'+{face}', fill=ink, tags=('dice',),
+                               font=(TITLE_FONT, max(10, int(half * 0.55)), 'bold'))
+
+    def _spin_round_wheel(self):
         comparison = self.fight_rounds[self.fight_round_index]
         winner_index = comparison['winner_index']
         first_points = max(0, comparison['first_total'])
@@ -2413,9 +2542,8 @@ class CharacterApp:
         rotation_delta = (target - start_rotation % 360) % 360 + random.randint(4, 6) * 360
         frames = 75
         frame_index = 0
-        self.fight_status.configure(
-            text=f"{comparison['attribute']}: {self._round_score_text(comparison)}",
-        )
+        score = f"{comparison['first_total']} : {comparison['second_total']}"
+        self._show_fight_board(self._round_title(), score, self._round_note(comparison))
 
         def animate():
             nonlocal frame_index
@@ -2431,13 +2559,14 @@ class CharacterApp:
             winner_text = self._winner_text(
                 comparison['winner'], comparison['first_total'], comparison['second_total'],
             )
-            self.fight_status.configure(text=f"{comparison['attribute']}: {winner_text}")
+            self._show_fight_board(self._round_title(), score, f'Раунд взял: {winner_text}')
             row_tag = 'first-wins' if comparison['winner_index'] == 0 else 'second-wins'
             round_item = self.fight_history.insert('', 'end', tags=(row_tag,), values=(
                 self.fight_round_index + 1, comparison['attribute'],
                 self._round_score_text(comparison), winner_text,
             ))
             self.fight_history.see(round_item)
+            self._insert_fight_effects(comparison['events'])
             self._flash_round_loser(1 - winner_index)
             self.audio.play_effect('round_win' if winner_index == 0 else 'round_loss')
             self.fight_round_index += 1
